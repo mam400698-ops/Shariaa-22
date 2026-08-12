@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Subject,
   Paragraph,
@@ -8,19 +8,16 @@ import {
   TrashItem,
 } from '../types';
 import { DBStore } from '../data/dbStore';
+import { extractBatchFromText } from '../utils/extractor';
 import {
   Plus,
   Trash2,
   Edit2,
   Search,
-  CheckSquare,
-  Square,
   Sparkles,
   Table as TableIcon,
-  RefreshCw,
   BookOpen,
   ArrowRight,
-  ShieldCheck,
   RotateCcw,
   AlertTriangle,
   HelpCircle,
@@ -28,11 +25,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Network,
-  Image,
   Upload,
-  MessageSquare,
-  FileText,
+  X,
+  Zap,
 } from 'lucide-react';
 import { QuestionImportModal } from './QuestionImportModal';
 
@@ -55,19 +50,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'subjects' | 'paragraphs' | 'questions' | 'tables' | 'trash'>('subjects');
+  // STRICT USER REQUIREMENT: Exactly 3 main tabs!
+  // 1. manage_all: unified editing for subjects, paragraphs, keypoints, and questions
+  // 2. tables: comparison tables
+  // 3. trash: trash bin
+  const [activeTab, setActiveTab] = useState<'manage_all' | 'tables' | 'trash'>('manage_all');
 
-  // Search & Filter state
+  // Search & Filter state for management tree
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSubjectIdFilter, setSelectedSubjectIdFilter] = useState<string>('all');
 
-  // Question Multi-Select state
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
-
-  // Modals & Forms State
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importSelectedParagraphId, setImportSelectedParagraphId] = useState<string | undefined>(undefined);
-
+  // Delete modal state
   const [confirmDeleteModal, setConfirmDeleteModal] = useState<{
     isOpen: boolean;
     type: 'batch_questions' | 'single_question' | 'paragraph' | 'subject' | 'empty_trash';
@@ -75,46 +68,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     count?: number;
   }>({ isOpen: false, type: 'single_question' });
 
+  // Batch import modal trigger
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importSelectedParagraphId, setImportSelectedParagraphId] = useState<string | undefined>(undefined);
+
   // ----------------------------------------------------
-  // 1) SUBJECT FORM STATE (خانة إضافة وتعديل المواد وتغيير اسمها)
+  // 1) SUBJECT FORM STATE
   // ----------------------------------------------------
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [subjectNameInput, setSubjectNameInput] = useState('');
 
   // ----------------------------------------------------
-  // 2) PARAGRAPH FORM STATE (خانة إضافة وتعديل الفقرات)
+  // 2) PARAGRAPH CREATION & SAVED WORKSTATION STATE
   // ----------------------------------------------------
   const [editingParagraph, setEditingParagraph] = useState<Paragraph | null>(null);
   const [paraTitleInput, setParaTitleInput] = useState('');
-  const [paraContentInput, setParaContentInput] = useState('');
   const [paraSubjectIdInput, setParaSubjectIdInput] = useState(subjects[0]?.id || '');
-  const [paraKeyPointsInput, setParaKeyPointsInput] = useState('');
-  const [paraHasTableInput, setParaHasTableInput] = useState(false);
-  const [tableHeadersInput, setTableHeadersInput] = useState('');
-  const [tableRowsInput, setTableRowsInput] = useState('');
-  const [paraTableImageUrlInput, setParaTableImageUrlInput] = useState('');
+  
+  // Currently active saved paragraph for adding key points & questions
+  const [activeSavedParagraphId, setActiveSavedParagraphId] = useState<string | null>(null);
 
-  // Expanded paragraph IDs for inspecting questions
-  const [expandedParagraphIds, setExpandedParagraphIds] = useState<string[]>([]);
+  // Key points input for saved paragraph
+  const [inlineKeyPointsText, setInlineKeyPointsText] = useState('');
+
+  // Questions batch paste text for saved paragraph
+  const [inlineQuestionsPasteText, setInlineQuestionsPasteText] = useState('');
+
+  // Questions single creation form for saved paragraph
+  const [inlineQText, setInlineQText] = useState('');
+  const [inlineQOptions, setInlineQOptions] = useState<string[]>(['', '', '', '']);
+  const [inlineQCorrectIdx, setInlineQCorrectIdx] = useState(0);
+  const [inlineQExplanation, setInlineQExplanation] = useState('');
+  const [inlineQSourceType, setInlineQSourceType] = useState<'paragraph' | 'table'>('paragraph');
+
+  // Inline question editor state (for modifying existing questions)
+  const [editingQId, setEditingQId] = useState<string | null>(null);
+  const [editQText, setEditQText] = useState('');
+  const [editQOptions, setEditQOptions] = useState<string[]>(['', '', '', '']);
+  const [editQCorrectIdx, setEditQCorrectIdx] = useState(0);
+  const [editQExplanation, setEditQExplanation] = useState('');
 
   // ----------------------------------------------------
-  // 3) QUESTION MANUAL FORM STATE (خانة إضافة أسئلة)
-  // ----------------------------------------------------
-  const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
-  const [qSubjectId, setQSubjectId] = useState(subjects[0]?.id || '');
-  const [qParagraphId, setQParagraphId] = useState(paragraphs[0]?.id || '');
-  const [qText, setQText] = useState('');
-  const [qOptions, setQOptions] = useState<string[]>(['', '', '', '']);
-  const [qCorrectIdx, setQCorrectIdx] = useState(0);
-  const [qExplanation, setQExplanation] = useState('');
-  const [qSourceType, setQSourceType] = useState<'paragraph' | 'table'>('paragraph');
-  const [showQuestionAddCard, setShowQuestionAddCard] = useState(false);
-
-  // Filtered paragraphs by selected subject for manual question form
-  const filteredQParagraphs = paragraphs.filter(p => !qSubjectId || p.subjectId === qSubjectId);
-
-  // ----------------------------------------------------
-  // 4) DEDICATED TABLE FORM STATE (خانة الجداول والمقارنات)
+  // 3) TABLES FORM STATE
   // ----------------------------------------------------
   const [tblSubjectId, setTblSubjectId] = useState(subjects[0]?.id || '');
   const [tblParagraphId, setTblParagraphId] = useState(paragraphs[0]?.id || '');
@@ -124,46 +119,75 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [tblRowsInput, setTblRowsInput] = useState('');
   const [editingTableParagraphId, setEditingTableParagraphId] = useState<string | null>(null);
 
-  // Filtered paragraphs by selected subject for table form
+  // Filtered paragraphs for table form
   const filteredTblParagraphs = paragraphs.filter(p => !tblSubjectId || p.subjectId === tblSubjectId);
 
-  // Filtered Questions list
-  const filteredQuestions = questions.filter(q => {
-    const matchSearch =
-      q.questionText.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.explanation.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.options.some(o => o.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Hierarchy Expansion state
+  const [expandedSubjectIds, setExpandedSubjectIds] = useState<string[]>([]);
+  const [expandedParagraphIds, setExpandedParagraphIds] = useState<string[]>([]);
 
-    if (selectedSubjectIdFilter === 'all') return matchSearch;
-
-    const p = paragraphs.find(p => p.id === q.paragraphId);
-    return matchSearch && p?.subjectId === selectedSubjectIdFilter;
-  });
-
-  // Toggle select all questions
-  const handleToggleSelectAll = () => {
-    if (selectedQuestionIds.length === filteredQuestions.length) {
-      setSelectedQuestionIds([]);
-    } else {
-      setSelectedQuestionIds(filteredQuestions.map(q => q.id));
+  // Keep dropdowns valid
+  useEffect(() => {
+    if (subjects.length > 0) {
+      if (!tblSubjectId || !subjects.some(s => s.id === tblSubjectId)) {
+        setTblSubjectId(subjects[0].id);
+      }
+      if (!paraSubjectIdInput || !subjects.some(s => s.id === paraSubjectIdInput)) {
+        setParaSubjectIdInput(subjects[0].id);
+      }
     }
-  };
+  }, [subjects]);
 
-  const handleToggleSelectQuestion = (id: string) => {
-    if (selectedQuestionIds.includes(id)) {
-      setSelectedQuestionIds(selectedQuestionIds.filter(qId => qId !== id));
-    } else {
-      setSelectedQuestionIds([...selectedQuestionIds, id]);
+  // 1) Sync available paragraph when selected subject changes in Tables tab
+  useEffect(() => {
+    if (tblSubjectId) {
+      const avail = paragraphs.filter(p => p.subjectId === tblSubjectId);
+      if (avail.length > 0) {
+        if (!avail.some(p => p.id === tblParagraphId)) {
+          setTblParagraphId(avail[0].id);
+        }
+      } else {
+        setTblParagraphId('');
+      }
     }
-  };
+  }, [tblSubjectId, paragraphs]);
 
-  const toggleExpandParagraph = (id: string) => {
-    if (expandedParagraphIds.includes(id)) {
-      setExpandedParagraphIds(expandedParagraphIds.filter(pId => pId !== id));
-    } else {
-      setExpandedParagraphIds([...expandedParagraphIds, id]);
+  // 2) Auto-sync table input fields when tblParagraphId changes or tables update
+  useEffect(() => {
+    if (!tblParagraphId) {
+      setTblTitleInput('');
+      setTblImageUrlInput('');
+      setTblHeadersInput('');
+      setTblRowsInput('');
+      setEditingTableParagraphId(null);
+      return;
     }
-  };
+
+    const existingTbl = tables.find(t => t.paragraphId === tblParagraphId);
+    if (existingTbl) {
+      setTblTitleInput(existingTbl.title || '');
+      setTblImageUrlInput(existingTbl.imageUrl || '');
+      setTblHeadersInput(existingTbl.headers ? existingTbl.headers.join(' | ') : '');
+      setTblRowsInput(existingTbl.rows ? existingTbl.rows.map(r => r.join(' | ')).join('\n') : '');
+      setEditingTableParagraphId(existingTbl.paragraphId);
+    } else {
+      setTblTitleInput('');
+      setTblImageUrlInput('');
+      setTblHeadersInput('');
+      setTblRowsInput('');
+      setEditingTableParagraphId(null);
+    }
+  }, [tblParagraphId, tables]);
+
+  // When activeSavedParagraphId changes, sync its key points
+  useEffect(() => {
+    if (activeSavedParagraphId) {
+      const kps = keyPoints.filter(kp => kp.paragraphId === activeSavedParagraphId);
+      setInlineKeyPointsText(kps.map(kp => kp.text).join('\n'));
+    }
+  }, [activeSavedParagraphId, keyPoints]);
+
+  const trashItems: TrashItem[] = DBStore.getTrashItems();
 
   // ----------------------------------------------------
   // HANDLERS FOR SUBJECTS
@@ -191,20 +215,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // ----------------------------------------------------
   // HANDLERS FOR PARAGRAPHS
   // ----------------------------------------------------
-  const handleParaTableImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = event => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        setParaTableImageUrlInput(dataUrl);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
   const handleSaveParagraph = (e: React.FormEvent) => {
     e.preventDefault();
     if (!paraTitleInput.trim() || !paraSubjectIdInput) return;
@@ -213,120 +223,108 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       id: editingParagraph?.id,
       subjectId: paraSubjectIdInput,
       title: paraTitleInput.trim(),
-      content: paraContentInput.trim(),
-      hasTable: paraHasTableInput,
     });
 
-    // Save key points
-    if (paraKeyPointsInput.trim()) {
-      const lines = paraKeyPointsInput.split('\n').map(s => s.trim()).filter(Boolean);
-      DBStore.saveKeyPointsForParagraph(savedPara.id, lines);
-    }
-
-    // Save table
-    if (paraHasTableInput) {
-      const headers = tableHeadersInput.trim()
-        ? tableHeadersInput.split(',').map(s => s.trim())
-        : [];
-      const rows = tableRowsInput.trim()
-        ? tableRowsInput
-            .split('\n')
-            .map(row => row.split(',').map(s => s.trim()))
-            .filter(r => r.length > 0 && r[0] !== '')
-        : [];
-
-      DBStore.saveTableData(
-        savedPara.id,
-        headers,
-        rows,
-        undefined,
-        paraTableImageUrlInput.trim() || undefined
-      );
-    }
-
+    // Set saved paragraph as active workstation
+    setActiveSavedParagraphId(savedPara.id);
     setEditingParagraph(null);
     setParaTitleInput('');
-    setParaContentInput('');
-    setParaKeyPointsInput('');
-    setTableHeadersInput('');
-    setTableRowsInput('');
-    setParaTableImageUrlInput('');
-    setParaHasTableInput(false);
     onRefreshData();
   };
 
-  const handleEditParagraphClick = (p: Paragraph) => {
+  const handleSelectParagraphForWorkstation = (p: Paragraph) => {
+    setActiveSavedParagraphId(p.id);
     setEditingParagraph(p);
-    setParaSubjectIdInput(p.subjectId);
     setParaTitleInput(p.title);
-    setParaContentInput(p.content || '');
-    setParaHasTableInput(p.hasTable);
+    setParaSubjectIdInput(p.subjectId);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
-    const kps = keyPoints.filter(kp => kp.paragraphId === p.id);
-    setParaKeyPointsInput(kps.map(kp => kp.text).join('\n'));
+  // Save Key Points for Active Saved Paragraph
+  const handleSaveInlineKeyPoints = () => {
+    if (!activeSavedParagraphId) return;
+    const lines = inlineKeyPointsText
+      .split('\n')
+      .map(s => s.trim())
+      .filter(Boolean);
 
-    const tbl = tables.find(t => t.paragraphId === p.id);
-    if (tbl) {
-      setTableHeadersInput(tbl.headers ? tbl.headers.join(', ') : '');
-      setTableRowsInput(tbl.rows ? tbl.rows.map(r => r.join(', ')).join('\n') : '');
-      setParaTableImageUrlInput(tbl.imageUrl || '');
-    } else {
-      setTableHeadersInput('');
-      setTableRowsInput('');
-      setParaTableImageUrlInput('');
+    DBStore.saveKeyPointsForParagraph(activeSavedParagraphId, lines);
+    onRefreshData();
+    alert('تم حفظ النقاط المفتاحية للفقرة بنجاح! ✨');
+  };
+
+  // Instant Batch Questions Extractor & Saver for Active Saved Paragraph
+  const handleBatchExtractInline = () => {
+    if (!activeSavedParagraphId || !inlineQuestionsPasteText.trim()) return;
+
+    const parsed = extractBatchFromText(inlineQuestionsPasteText);
+    if (parsed.questions.length === 0) {
+      alert('لم يتم التعرف على أسئلة في النص الملصوق! يرجى التأكد من التنسيق.');
+      return;
     }
 
-    setActiveTab('paragraphs');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  // Open manual question form pre-selected for a paragraph
-  const handleAddQuestionToParagraphClick = (pId: string) => {
-    setEditingQuestion(null);
-    setQParagraphId(pId);
-    setQText('');
-    setQOptions(['', '', '', '']);
-    setQCorrectIdx(0);
-    setQExplanation('');
-    setShowQuestionAddCard(true);
-    setActiveTab('questions');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  // Open smart import for a specific paragraph
-  const handleSmartImportForParagraphClick = (pId: string) => {
-    setImportSelectedParagraphId(pId);
-    setIsImportModalOpen(true);
-  };
-
-  // ----------------------------------------------------
-  // HANDLERS FOR QUESTIONS
-  // ----------------------------------------------------
-  const handleSaveSingleQuestion = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!qText.trim() || !qParagraphId) return;
-
-    DBStore.saveQuestion({
-      id: editingQuestion?.id,
-      paragraphId: qParagraphId,
-      sourceType: qSourceType,
-      questionText: qText.trim(),
-      options: qOptions.map(o => o.trim()).filter(Boolean),
-      correctOptionIndex: qCorrectIdx,
-      explanation: qExplanation.trim(),
+    let addedCount = 0;
+    parsed.questions.forEach(q => {
+      DBStore.addQuestion({
+        paragraphId: activeSavedParagraphId,
+        questionText: q.questionText,
+        options: q.options,
+        correctOptionIndex: q.correctOptionIndex,
+        explanation: q.explanation || '',
+        sourceType: 'paragraph',
+      });
+      addedCount++;
     });
 
-    setEditingQuestion(null);
-    setQText('');
-    setQOptions(['', '', '', '']);
-    setQCorrectIdx(0);
-    setQExplanation('');
-    setShowQuestionAddCard(false);
+    setInlineQuestionsPasteText('');
+    onRefreshData();
+    alert(`تم استخراج وإضافة ${addedCount} سؤال بنجاح لهذه الفقرة! 🎉`);
+  };
+
+  // Instant Single Question Saver for Active Saved Paragraph
+  const handleAddSingleInlineQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeSavedParagraphId || !inlineQText.trim()) return;
+
+    const cleanedOptions = inlineQOptions.map(o => o.trim()).filter(Boolean);
+    if (cleanedOptions.length < 2) {
+      alert('يرجى إدخال خيارين على الأقل للسؤال!');
+      return;
+    }
+
+    DBStore.addQuestion({
+      paragraphId: activeSavedParagraphId,
+      questionText: inlineQText.trim(),
+      options: inlineQOptions.map((o, idx) => o.trim() || `خيار ${idx + 1}`),
+      correctOptionIndex: inlineQCorrectIdx,
+      explanation: inlineQExplanation.trim(),
+      sourceType: inlineQSourceType,
+    });
+
+    setInlineQText('');
+    setInlineQOptions(['', '', '', '']);
+    setInlineQCorrectIdx(0);
+    setInlineQExplanation('');
+    onRefreshData();
+  };
+
+  // Save Edit for Existing Question
+  const handleSaveEditedQuestion = (qId: string) => {
+    if (!editQText.trim()) return;
+
+    DBStore.updateQuestion(qId, {
+      questionText: editQText.trim(),
+      options: editQOptions.map((o, idx) => o.trim() || `خيار ${idx + 1}`),
+      correctOptionIndex: editQCorrectIdx,
+      explanation: editQExplanation.trim(),
+    });
+
+    setEditingQId(null);
     onRefreshData();
   };
 
   // ----------------------------------------------------
-  // 4) TABLE DEDICATED HANDLERS
+  // HANDLERS FOR TABLES
   // ----------------------------------------------------
   const handleTableImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -342,13 +340,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const handleSaveTableDedicated = (e: React.FormEvent) => {
+  const handleSaveTable = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tblParagraphId) return;
+    if (!tblParagraphId) {
+      alert('يرجى اختيار الفقرة التابع لها الجدول!');
+      return;
+    }
 
-    const headers = tblHeadersInput.trim() ? tblHeadersInput.split('|').map(s => s.trim()) : [];
+    const headers = tblHeadersInput.trim()
+      ? tblHeadersInput.split('|').map(s => s.trim())
+      : [];
+
     const rows = tblRowsInput.trim()
-      ? tblRowsInput.split('\n').filter(r => r.trim()).map(r => r.split('|').map(c => c.trim()))
+      ? tblRowsInput
+          .split('\n')
+          .map(row => row.split('|').map(s => s.trim()))
+          .filter(r => r.length > 0 && r[0] !== '')
       : [];
 
     DBStore.saveTableData(
@@ -359,47 +366,61 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       tblImageUrlInput.trim() || undefined
     );
 
-    onRefreshData();
     setTblTitleInput('');
     setTblImageUrlInput('');
     setTblHeadersInput('');
     setTblRowsInput('');
     setEditingTableParagraphId(null);
+    onRefreshData();
+    alert('تم حفظ بيانات الجدول بنجاح! ✨');
   };
 
   const handleEditTableClick = (tbl: TableData) => {
     const para = paragraphs.find(p => p.id === tbl.paragraphId);
     if (para) {
       setTblSubjectId(para.subjectId);
-      setTblParagraphId(tbl.paragraphId);
     }
+    setTblParagraphId(tbl.paragraphId);
     setTblTitleInput(tbl.title || '');
     setTblImageUrlInput(tbl.imageUrl || '');
     setTblHeadersInput(tbl.headers ? tbl.headers.join(' | ') : '');
     setTblRowsInput(tbl.rows ? tbl.rows.map(r => r.join(' | ')).join('\n') : '');
     setEditingTableParagraphId(tbl.paragraphId);
+    setActiveTab('tables');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleDeleteTableClick = (tbl: TableData) => {
-    DBStore.deleteTableData(tbl.paragraphId);
-    onRefreshData();
+    setConfirmDeleteModal({
+      isOpen: true,
+      type: 'table',
+      targetId: tbl.paragraphId,
+    });
   };
 
-  // Delete Action Executor
+  // ----------------------------------------------------
+  // DELETE CONFIRMATION EXECUTOR
+  // ----------------------------------------------------
   const executeDeleteAction = () => {
-    const { type, targetId } = confirmDeleteModal;
-
-    if (type === 'batch_questions') {
-      DBStore.deleteQuestionsBatch(selectedQuestionIds);
-      setSelectedQuestionIds([]);
-    } else if (type === 'single_question' && targetId) {
-      DBStore.deleteQuestionsBatch([targetId]);
-    } else if (type === 'paragraph' && targetId) {
-      DBStore.deleteParagraph(targetId);
-    } else if (type === 'subject' && targetId) {
-      DBStore.deleteSubject(targetId);
-    } else if (type === 'empty_trash') {
+    if (confirmDeleteModal.type === 'single_question' && confirmDeleteModal.targetId) {
+      DBStore.deleteQuestion(confirmDeleteModal.targetId);
+    } else if (confirmDeleteModal.type === 'paragraph' && confirmDeleteModal.targetId) {
+      DBStore.deleteParagraph(confirmDeleteModal.targetId);
+      if (activeSavedParagraphId === confirmDeleteModal.targetId) {
+        setActiveSavedParagraphId(null);
+      }
+    } else if (confirmDeleteModal.type === 'subject' && confirmDeleteModal.targetId) {
+      DBStore.deleteSubject(confirmDeleteModal.targetId);
+    } else if (confirmDeleteModal.type === 'table' && confirmDeleteModal.targetId) {
+      DBStore.deleteTableData(confirmDeleteModal.targetId);
+      if (tblParagraphId === confirmDeleteModal.targetId) {
+        setTblTitleInput('');
+        setTblImageUrlInput('');
+        setTblHeadersInput('');
+        setTblRowsInput('');
+        setEditingTableParagraphId(null);
+      }
+    } else if (confirmDeleteModal.type === 'empty_trash') {
       DBStore.emptyTrash();
     }
 
@@ -407,128 +428,103 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     onRefreshData();
   };
 
-  const trashItems = DBStore.getTrash();
+  // Active saved paragraph object
+  const activeSavedParagraph = paragraphs.find(p => p.id === activeSavedParagraphId);
+  const activeSavedSubject = subjects.find(s => s.id === activeSavedParagraph?.subjectId);
+  const activeSavedQuestions = questions.filter(q => q.paragraphId === activeSavedParagraphId);
 
   return (
-    <div className="space-y-8 animate-fade-in pb-16">
-      {/* Top Header */}
-      <div className="bg-gradient-to-r from-slate-900 via-pink-950 to-orange-950 text-white p-6 sm:p-8 rounded-3xl shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-500/30 text-pink-300 border border-pink-500/40 text-xs font-bold">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>لوحة تحكّم الإدمن المحمية</span>
+    <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+      {/* Header Banner */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="p-3 bg-gradient-to-br from-pink-500 to-rose-500 text-white rounded-2xl shadow-md">
+            <BookOpen className="w-6 h-6" />
           </div>
-          <h2 className="text-2xl font-black">إدارة المواد والفقرات والأسئلة</h2>
-          <p className="text-xs text-slate-300">
-            أضف وعدّل أسرع المواد والفقرات والأسئلة مع شاشة المعاينة الذكية وسلة المحذوفات.
-          </p>
+          <div>
+            <h2 className="text-lg font-black text-slate-800">لوحة التحكم والإدارة</h2>
+            <p className="text-xs text-slate-500 font-bold">
+              إضافة وتعديل المواد، الفقرات، المقارنات، واستيراد الأسئلة فوراً.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setImportSelectedParagraphId(undefined);
-              setIsImportModalOpen(true);
-            }}
-            className="px-4 py-2.5 bg-gradient-to-r from-pink-500 to-orange-400 text-white rounded-2xl text-xs font-extrabold shadow-md btn-press flex items-center gap-2"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>استيراد أسئلة ذكي</span>
-          </button>
-
-          <button
-            onClick={onExitAdmin}
-            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl text-xs font-bold btn-press flex items-center gap-1.5 border border-white/20"
-          >
-            <ArrowRight className="w-4 h-4" />
-            <span>العودة للموقع</span>
-          </button>
-        </div>
+        <button
+          onClick={onExitAdmin}
+          className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs font-black transition-all btn-press flex items-center gap-2"
+        >
+          <ArrowRight className="w-4 h-4" />
+          <span>العودة للرئيسية</span>
+        </button>
       </div>
 
-      {/* Main Admin Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
+      {/* STRICT USER REQUIREMENT: EXACTLY 3 MAIN TABS */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 border-b border-slate-200 pb-3">
         <button
-          onClick={() => setActiveTab('subjects')}
-          className={`px-5 py-3 rounded-2xl text-xs font-black transition-all btn-press flex items-center gap-2 ${
-            activeTab === 'subjects'
-              ? 'bg-pink-500 text-white shadow-md'
+          onClick={() => setActiveTab('manage_all')}
+          className={`px-5 py-3.5 rounded-2xl text-xs font-black transition-all btn-press flex items-center justify-center gap-2 ${
+            activeTab === 'manage_all'
+              ? 'bg-gradient-to-r from-pink-600 to-rose-600 text-white shadow-md'
               : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
           }`}
         >
           <BookOpen className="w-4 h-4" />
-          <span>1. خانة إضافة وتعديل المواد ({subjects.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('paragraphs')}
-          className={`px-5 py-3 rounded-2xl text-xs font-black transition-all btn-press flex items-center gap-2 ${
-            activeTab === 'paragraphs'
-              ? 'bg-pink-500 text-white shadow-md'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          <span>2. خانة إضافة الفقرات والأسئلة ({paragraphs.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('questions')}
-          className={`px-5 py-3 rounded-2xl text-xs font-black transition-all btn-press flex items-center gap-2 ${
-            activeTab === 'questions'
-              ? 'bg-pink-500 text-white shadow-md'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <HelpCircle className="w-4 h-4" />
-          <span>3. خانة جميع الأسئلة ({questions.length})</span>
+          <span>1. إضافة وتعديل الشامل (مواد، فقرات، أسئلة)</span>
         </button>
 
         <button
           onClick={() => setActiveTab('tables')}
-          className={`px-5 py-3 rounded-2xl text-xs font-black transition-all btn-press flex items-center gap-2 ${
+          className={`px-5 py-3.5 rounded-2xl text-xs font-black transition-all btn-press flex items-center justify-center gap-2 ${
             activeTab === 'tables'
               ? 'bg-orange-500 text-white shadow-md'
               : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
           }`}
         >
           <TableIcon className="w-4 h-4" />
-          <span>4. خانة الجداول والمقارنات ({tables.length})</span>
+          <span>2. خانة الجداول والمقارنات ({tables.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('trash')}
-          className={`px-5 py-3 rounded-2xl text-xs font-black transition-all btn-press flex items-center gap-2 ${
+          className={`px-5 py-3.5 rounded-2xl text-xs font-black transition-all btn-press flex items-center justify-center gap-2 ${
             activeTab === 'trash'
               ? 'bg-rose-600 text-white shadow-md'
               : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
           }`}
         >
           <RotateCcw className="w-4 h-4" />
-          <span>سلة المحذوفات ({trashItems.length})</span>
+          <span>3. سلة المحذوفات ({trashItems.length})</span>
         </button>
       </div>
 
       {/* ========================================================= */}
-      {/* TAB 1: SUBJECTS (خانة إضافة وتعديل مواد وتغيير أسمائها) */}
+      {/* TAB 1: UNIFIED MANAGEMENT (المواد + الفقرات + الأسئلة) */}
       {/* ========================================================= */}
-      {activeTab === 'subjects' && (
-        <div className="space-y-6">
-          {/* Add / Edit Subject Form */}
-          <form
-            onSubmit={handleSaveSubject}
-            className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-4"
-          >
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-pink-100 text-pink-600 rounded-xl">
-                <Plus className="w-5 h-5" />
+      {activeTab === 'manage_all' && (
+        <div className="space-y-8 animate-fade-in">
+          {/* SECTION 1: SUBJECTS ADDITION / EDITING */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-pink-100 text-pink-600 rounded-xl">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-base">
+                    {editingSubject ? 'تعديل اسم المادة الدراسية:' : '1️⃣ إضافة أو تغيير مادة دراسية:'}
+                  </h3>
+                  <p className="text-xs text-slate-500">أدخل اسم المادة لإضافتها للنظام أو اختر مادة لتعديل اسمها.</p>
+                </div>
               </div>
-              <h3 className="font-extrabold text-slate-800 text-base">
-                {editingSubject ? 'تغيير اسم المادة الحالية:' : 'إضافة مادة دراسية جديدة:'}
-              </h3>
+
+              {subjects.length > 0 && (
+                <span className="text-xs font-extrabold bg-pink-50 text-pink-700 px-3 py-1 rounded-full border border-pink-200">
+                  {subjects.length} مواد متاحة
+                </span>
+              )}
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-3">
+            <form onSubmit={handleSaveSubject} className="flex flex-col sm:flex-row gap-3">
               <input
                 type="text"
                 value={subjectNameInput}
@@ -554,583 +550,328 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   type="submit"
                   className="px-6 py-3 bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white rounded-2xl text-xs font-extrabold btn-press shadow-md"
                 >
-                  {editingSubject ? 'حفظ تغيير الاسم' : '+ إضافة المادة'}
+                  {editingSubject ? 'حفظ تغيير الاسم' : '+ حفظ المادة'}
                 </button>
               </div>
-            </div>
-          </form>
+            </form>
 
-          {/* Subjects Cards Grid */}
-          <div className="space-y-3">
-            <h4 className="font-extrabold text-slate-800 text-sm">
-              المواد المتاحة حالياً ({subjects.length}):
-            </h4>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {subjects.map(s => {
-                const subjParas = paragraphs.filter(p => p.subjectId === s.id);
-                const subjParaIds = subjParas.map(p => p.id);
-                const subjQuestions = questions.filter(q => subjParaIds.includes(q.paragraphId));
-
-                return (
-                  <div
-                    key={s.id}
-                    className="bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm flex flex-col justify-between gap-4 hover:border-pink-200 transition-all"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <h5 className="font-extrabold text-slate-800 text-base flex items-center gap-2">
-                          <BookOpen className="w-5 h-5 text-pink-500" />
-                          <span>{s.name}</span>
-                        </h5>
-                        <div className="flex items-center gap-2 text-xs font-bold text-slate-500 pt-1">
-                          <span className="bg-pink-50 text-pink-700 px-2.5 py-0.5 rounded-full">
-                            {subjParas.length} فقرة
-                          </span>
-                          <span className="bg-orange-50 text-orange-700 px-2.5 py-0.5 rounded-full">
-                            {subjQuestions.length} سؤال
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleEditSubjectClick(s)}
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-pink-50 hover:text-pink-600 text-slate-700 rounded-xl text-xs font-bold transition-colors flex items-center gap-1"
-                          title="تغيير اسم المادة"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                          <span>تعديل الاسم</span>
-                        </button>
-
-                        <button
-                          onClick={() =>
-                            setConfirmDeleteModal({
-                              isOpen: true,
-                              type: 'subject',
-                              targetId: s.id,
-                            })
-                          }
-                          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
-                          title="حذف المادة"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setParaSubjectIdInput(s.id);
-                        setActiveTab('paragraphs');
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      className="w-full py-2.5 bg-slate-50 hover:bg-pink-50 text-slate-700 hover:text-pink-600 rounded-xl text-xs font-bold border border-slate-200/80 transition-all flex items-center justify-center gap-1.5"
-                    >
-                      <Plus className="w-4 h-4 text-pink-500" />
-                      <span>إضافة فقرة جديدة لهذه المادة</span>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* TAB 2: PARAGRAPHS & QUESTIONS ADDITION (خانة إضافة الفقرات وتنسيق الأسئلة) */}
-      {/* ========================================================= */}
-      {activeTab === 'paragraphs' && (
-        <div className="space-y-6">
-          {/* Create / Edit Paragraph Form */}
-          <form
-            onSubmit={handleSaveParagraph}
-            className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-4"
-          >
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-pink-100 text-pink-600 rounded-xl">
-                <Plus className="w-5 h-5" />
-              </div>
-              <h3 className="font-extrabold text-slate-800 text-base">
-                {editingParagraph ? 'تعديل بيانات الفقرة:' : 'إضافة فقرة جديدة المضمون:'}
-              </h3>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700 block">اختر المادة التابعة لها:</label>
-                <select
-                  value={paraSubjectIdInput}
-                  onChange={e => setParaSubjectIdInput(e.target.value)}
-                  required
-                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
+            {/* List of Subjects Pills */}
+            <div className="flex flex-wrap items-center gap-2 pt-2">
+              <span className="text-xs font-bold text-slate-500">المواد الحالية:</span>
+              {subjects.map(s => (
+                <div
+                  key={s.id}
+                  className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-bold text-slate-800"
                 >
-                  <option value="">-- اختر المادة --</option>
-                  {subjects.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700 block">عنوان الفقرة المفصل:</label>
-                <input
-                  type="text"
-                  value={paraTitleInput}
-                  onChange={e => setParaTitleInput(e.target.value)}
-                  placeholder="مثال: دلالة العام والخاص عند الحنفية..."
-                  required
-                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold focus:outline-none focus:border-pink-500"
-                />
-              </div>
-            </div>
-
-            {/* Key points text area */}
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-700 block">
-                النقاط المفتاحية (سطر لكل نقطة - تظهر للطلاب أعلى الفقرة):
-              </label>
-              <textarea
-                rows={3}
-                value={paraKeyPointsInput}
-                onChange={e => setParaKeyPointsInput(e.target.value)}
-                placeholder="• دلالة العام عند الجمهور ظنية.&#10;• الحنفية يوجبون تخصيص العام بالمتواتر..."
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs leading-relaxed focus:outline-none focus:border-pink-500"
-              />
-            </div>
-
-            {/* Explanation / Content */}
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-700 block">نص الفقرة الشارح (اختياري):</label>
-              <textarea
-                rows={3}
-                value={paraContentInput}
-                onChange={e => setParaContentInput(e.target.value)}
-                placeholder="أدخل الشرح التفصيلي للفقرة إن وجد..."
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs leading-relaxed focus:outline-none focus:border-pink-500"
-              />
-            </div>
-
-            {/* Table Option Checkbox & Image Upload */}
-            <div className="space-y-3 pt-2">
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-extrabold text-orange-700">
-                <input
-                  type="checkbox"
-                  checked={paraHasTableInput}
-                  onChange={e => setParaHasTableInput(e.target.checked)}
-                  className="w-4 h-4 text-orange-500 rounded focus:ring-orange-400"
-                />
-                <TableIcon className="w-4 h-4" />
-                <span>تحتوي هذه الفقرة على جدول مقارنة تفصيلي (صورة أو جدول نصي)</span>
-              </label>
-
-              {paraHasTableInput && (
-                <div className="p-4 bg-orange-50/70 rounded-2xl border border-orange-200 space-y-3">
-                  {/* Table Image Section */}
-                  <div className="space-y-2 p-3 bg-white rounded-xl border border-orange-100">
-                    <div className="flex items-center justify-between gap-2">
-                      <label className="text-[11px] font-bold text-orange-900 flex items-center gap-1">
-                        <Image className="w-3.5 h-3.5 text-orange-600" />
-                        <span>📷 إضافة الجدول كصورة (رفع ملف أو رابط صورة):</span>
-                      </label>
-                      <label className="cursor-pointer px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 shadow-xs transition-all btn-press">
-                        <Upload className="w-3 h-3" />
-                        <span>اختر صورة</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleParaTableImageUpload}
-                          className="hidden"
-                        />
-                      </label>
-                    </div>
-
-                    <input
-                      type="text"
-                      value={paraTableImageUrlInput}
-                      onChange={e => setParaTableImageUrlInput(e.target.value)}
-                      placeholder="ضع رابط صورة الجدول مباشرة هاهنا (http/https)..."
-                      className="w-full p-2 bg-slate-50 border border-orange-200 rounded-lg text-xs"
-                    />
-
-                    {paraTableImageUrlInput && (
-                      <div className="relative border border-orange-200 rounded-xl p-2 bg-slate-50 text-center space-y-1">
-                        <span className="text-[10px] font-bold text-orange-700">معاينة صورة الجدول:</span>
-                        <img
-                          src={paraTableImageUrlInput}
-                          alt="معاينة صورة الجدول"
-                          className="max-h-36 mx-auto object-contain rounded-lg border border-slate-200"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setParaTableImageUrlInput('')}
-                          className="px-2 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-bold rounded flex items-center gap-1 mx-auto"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>حذف الصورة</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Optional Text Table */}
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-orange-900 block">
-                      أو عناوين أعمدة الجدول النصي (مفصولة بفاصلة):
-                    </label>
-                    <input
-                      type="text"
-                      value={tableHeadersInput}
-                      onChange={e => setTableHeadersInput(e.target.value)}
-                      placeholder="المذهب, الحكم الشرعي, الدليل"
-                      className="w-full p-2.5 bg-white border border-orange-200 rounded-xl text-xs"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-orange-900 block">
-                      صفوف البيانات النصية (سطر لكل صف، القيم مفصولة بفاصلة):
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={tableRowsInput}
-                      onChange={e => setTableRowsInput(e.target.value)}
-                      placeholder="الجمهور, تحريم بيع العينة, سداً للذريعة&#10;الشافعية, الجواز مع الكراهة, إعمال ظاهر العقد"
-                      className="w-full p-2.5 bg-white border border-orange-200 rounded-xl text-xs font-mono"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-2 justify-end pt-2">
-              {editingParagraph && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingParagraph(null);
-                    setParaTitleInput('');
-                    setParaContentInput('');
-                    setParaKeyPointsInput('');
-                    setTableHeadersInput('');
-                    setTableRowsInput('');
-                    setParaTableImageUrlInput('');
-                    setParaHasTableInput(false);
-                  }}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200"
-                >
-                  إلغاء التعديل
-                </button>
-              )}
-              <button
-                type="submit"
-                className="px-6 py-2.5 bg-gradient-to-r from-pink-500 to-orange-400 text-white rounded-xl text-xs font-extrabold btn-press shadow-sm"
-              >
-                {editingParagraph ? 'تعديل الفقرة' : 'حفظ الفقرة الجديدة'}
-              </button>
-            </div>
-          </form>
-
-          {/* DEDICATED QUICK QUESTION ADDITION SECTION INSIDE TAB 2 */}
-          <div className="bg-gradient-to-r from-pink-50 via-purple-50 to-orange-50 p-6 rounded-3xl border border-pink-200/90 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2.5 bg-pink-500 text-white rounded-2xl shadow-sm shrink-0">
-                  <HelpCircle className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-800 text-base">
-                    ⚡ إضافة أسئلة سريعة للفقرات (بالخانة 2)
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">
-                    يمكنك لصق مجموعة أسئلة كاملة دفعة واحدة من الواتس/الوورد أو إضافة سؤال فردي.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setImportSelectedParagraphId(qParagraphId || paragraphs[0]?.id);
-                  setIsImportModalOpen(true);
-                }}
-                className="px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-black shadow-md btn-press flex items-center gap-1.5 shrink-0"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>لصق واستيراد أسئلة (من الواتس / الوورد)</span>
-              </button>
-            </div>
-
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => setShowQuestionAddCard(!showQuestionAddCard)}
-                className="px-4 py-2 bg-white hover:bg-pink-50 text-pink-700 border border-pink-200 rounded-xl text-xs font-extrabold transition-all flex items-center gap-1.5 shadow-xs"
-              >
-                <Plus className="w-4 h-4" />
-                <span>{showQuestionAddCard ? 'إغلاق نموذج إضافة سؤال فردي' : '+ إضافة سؤال فردي مباشر هنا'}</span>
-              </button>
-            </div>
-
-            {showQuestionAddCard && (
-              <form onSubmit={handleSaveSingleQuestion} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-4 pt-4 mt-2">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">1. المادة:</label>
-                    <select
-                      value={qSubjectId}
-                      onChange={e => {
-                        const subjId = e.target.value;
-                        setQSubjectId(subjId);
-                        const match = paragraphs.filter(p => p.subjectId === subjId);
-                        if (match.length > 0) setQParagraphId(match[0].id);
-                      }}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
-                    >
-                      {subjects.map(s => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">2. الفقرة التابعة:</label>
-                    <select
-                      value={qParagraphId}
-                      onChange={e => setQParagraphId(e.target.value)}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
-                    >
-                      {filteredQParagraphs.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">3. نوع السؤال:</label>
-                    <div className="flex gap-2 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={() => setQSourceType('paragraph')}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold ${
-                          qSourceType === 'paragraph' ? 'bg-pink-500 text-white' : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        سؤال فقرة
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setQSourceType('table')}
-                        className={`flex-1 py-2 rounded-xl text-xs font-bold ${
-                          qSourceType === 'table' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        سؤال جدول
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700 block">نص السؤال:</label>
-                  <textarea
-                    rows={2}
-                    value={qText}
-                    onChange={e => setQText(e.target.value)}
-                    placeholder="أدخل نص السؤال..."
-                    required
-                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-pink-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {qOptions.map((opt, idx) => (
-                    <div key={idx} className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
-                        <span>الخيار {idx + 1}:</span>
-                        <span className="text-[10px] text-slate-500">
-                          {qCorrectIdx === idx ? '✓ الإجابة الصحيحة' : ''}
-                        </span>
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="qCorrectRadioTab2"
-                          checked={qCorrectIdx === idx}
-                          onChange={() => setQCorrectIdx(idx)}
-                          className="w-4 h-4 text-pink-500 cursor-pointer"
-                        />
-                        <input
-                          type="text"
-                          value={opt}
-                          onChange={e => {
-                            const updated = [...qOptions];
-                            updated[idx] = e.target.value;
-                            setQOptions(updated);
-                          }}
-                          placeholder={`الخيار ${idx + 1}`}
-                          required
-                          className={`w-full p-2.5 border rounded-xl text-xs ${
-                            qCorrectIdx === idx ? 'border-emerald-500 bg-emerald-50/50 font-bold' : 'border-slate-200 bg-slate-50'
-                          }`}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700 block">التعليل / الشرح المفصل:</label>
-                  <input
-                    type="text"
-                    value={qExplanation}
-                    onChange={e => setQExplanation(e.target.value)}
-                    placeholder="أدخل الشرح أو التعليل الذي يظهر للطالب..."
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-pink-500"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
+                  <span>{s.name}</span>
                   <button
-                    type="submit"
-                    className="px-6 py-2.5 bg-gradient-to-r from-pink-500 to-orange-400 text-white rounded-xl text-xs font-extrabold shadow-sm btn-press"
+                    onClick={() => handleEditSubjectClick(s)}
+                    className="text-slate-400 hover:text-pink-600"
+                    title="تعديل اسم المادة"
                   >
-                    حفظ السؤال بالفقرة المختارة
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() =>
+                      setConfirmDeleteModal({
+                        isOpen: true,
+                        type: 'subject',
+                        targetId: s.id,
+                      })
+                    }
+                    className="text-slate-400 hover:text-rose-600"
+                    title="حذف المادة"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
-              </form>
-            )}
+              ))}
+            </div>
           </div>
 
-          {/* List of Paragraphs with Direct Add Question Buttons */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-extrabold text-slate-800 text-sm">
-                قائمة الفقرات المتاحة ({paragraphs.length}):
-              </h4>
+          {/* SECTION 2: PARAGRAPH CREATION FORM */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <div className="p-2 bg-pink-100 text-pink-600 rounded-xl">
+                <BookOpen className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-800 text-base">
+                  {editingParagraph ? 'تعديل الفقرة:' : '2️⃣ إضافة فقرة جديدة:'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  اختر المادة ثم أدخل عنوان الفقرة واكبس زر الحفظ لفتح خانة النقاط المفتاحية وإضافة الأسئلة فوراً.
+                </p>
+              </div>
             </div>
 
-            {paragraphs.map(p => {
-              const subj = subjects.find(s => s.id === p.subjectId);
-              const pQuestions = questions.filter(q => q.paragraphId === p.id);
-              const isExpanded = expandedParagraphIds.includes(p.id);
+            <form onSubmit={handleSaveParagraph} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">المادة التابعة لها:</label>
+                  <select
+                    value={paraSubjectIdInput}
+                    onChange={e => setParaSubjectIdInput(e.target.value)}
+                    required
+                    className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
+                  >
+                    {subjects.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              return (
-                <div
-                  key={p.id}
-                  className="bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm space-y-4"
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">عنوان الفقرة (الدرس):</label>
+                  <input
+                    type="text"
+                    value={paraTitleInput}
+                    onChange={e => setParaTitleInput(e.target.value)}
+                    placeholder="مثال: تعريف بيع العينة وحكمه الشرعي..."
+                    required
+                    className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold focus:outline-none focus:border-pink-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                {editingParagraph && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingParagraph(null);
+                      setParaTitleInput('');
+                    }}
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+                  >
+                    إلغاء التعديل
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="px-8 py-3 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white rounded-2xl text-xs font-black shadow-md btn-press flex items-center gap-2"
                 >
-                  {/* Paragraph Header */}
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                    <div>
-                      <span className="text-[10px] font-extrabold text-pink-700 bg-pink-100 px-3 py-0.5 rounded-full mb-1 inline-block">
-                        {subj?.name || 'مادة غير محددة'}
-                      </span>
-                      <h4 className="font-extrabold text-slate-800 text-base">{p.title}</h4>
-                    </div>
+                  <Save className="w-4 h-4" />
+                  <span>💾 حفظ الفقرة وتفعيل إضافة الأسئلة لها</span>
+                </button>
+              </div>
+            </form>
+          </div>
 
-                    {/* Paragraph Action Buttons (Adds Questions!) */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      {/* Button to add question manually */}
-                      <button
-                        onClick={() => handleAddQuestionToParagraphClick(p.id)}
-                        className="px-3 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-xl text-xs font-extrabold border border-pink-200 btn-press flex items-center gap-1"
-                        title="إضافة سؤال يدوياً لهذا الفقرة"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>+ سؤال يدوي</span>
-                      </button>
+          {/* SECTION 3: SAVED PARAGRAPH WORKSTATION (APPEARS IMMEDIATELY AFTER SAVING OR SELECTING A PARAGRAPH) */}
+          {activeSavedParagraph ? (
+            <div className="bg-gradient-to-br from-pink-50/90 via-purple-50/40 to-slate-50 border-2 border-pink-300 rounded-3xl p-6 shadow-md space-y-6 animate-scale-up">
+              {/* Header Box */}
+              <div className="bg-white p-4 rounded-2xl border border-pink-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-extrabold text-pink-700 bg-pink-100 px-2.5 py-0.5 rounded-full inline-block">
+                    الفقرة المفعلة حالياً للإضافة والتعديل:
+                  </span>
+                  <h3 className="font-black text-slate-800 text-lg flex items-center gap-2">
+                    <span>{activeSavedParagraph.title}</span>
+                    <span className="text-xs text-slate-500 font-bold">({activeSavedSubject?.name})</span>
+                  </h3>
+                </div>
 
-                      {/* Button to batch import questions for this paragraph */}
-                      <button
-                        onClick={() => handleSmartImportForParagraphClick(p.id)}
-                        className="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-xl text-xs font-extrabold border border-orange-200 btn-press flex items-center gap-1"
-                        title="استيراد ذكي للأسئلة بداخل هذه الفقرة"
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-orange-500" />
-                        <span>استيراد أسئلة ذكي</span>
-                      </button>
-
-                      {/* Edit paragraph */}
-                      <button
-                        onClick={() => handleEditParagraphClick(p)}
-                        className="p-1.5 text-slate-500 hover:text-pink-600 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="تعديل الفقرة"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-
-                      {/* Delete paragraph */}
-                      <button
-                        onClick={() =>
-                          setConfirmDeleteModal({
-                            isOpen: true,
-                            type: 'paragraph',
-                            targetId: p.id,
-                          })
-                        }
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                        title="حذف الفقرة"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Question Count & Expand Toggle */}
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-600">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setTblSubjectId(activeSavedParagraph.subjectId);
+                      setTblParagraphId(activeSavedParagraph.id);
+                      setActiveTab('tables');
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    className="px-3.5 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border border-orange-200 transition-colors btn-press"
+                  >
+                    <TableIcon className="w-4 h-4 text-orange-600" />
                     <span>
-                      عدد الأسئلة بهذه الفقرة: <strong className="text-pink-600">{pQuestions.length} سؤال</strong>
+                      {tables.some(t => t.paragraphId === activeSavedParagraph.id)
+                        ? '✏️ تعديل جدول المقارنة'
+                        : '+ إضافة جدول مقارنة لهذه الفقرة'}
                     </span>
+                  </button>
 
-                    {pQuestions.length > 0 && (
-                      <button
-                        onClick={() => toggleExpandParagraph(p.id)}
-                        className="text-pink-600 hover:underline flex items-center gap-1"
-                      >
-                        <span>{isExpanded ? 'إخفاء أسئلة الفقرة' : 'عرض أسئلة الفقرة'}</span>
-                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                      </button>
-                    )}
+                  <button
+                    onClick={() => setActiveSavedParagraphId(null)}
+                    className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold flex items-center gap-1 border border-slate-200"
+                  >
+                    <X className="w-4 h-4" />
+                    <span>إغلاق هذه الفقرة</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3.1 KEY POINTS SECTION */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                    <span>🔑 النقاط المفتاحية لهذه الفقرة:</span>
+                  </h4>
+                  <span className="text-[10px] text-slate-500 font-bold">سطر لكل نقطة مفتاحية</span>
+                </div>
+
+                <textarea
+                  rows={3}
+                  value={inlineKeyPointsText}
+                  onChange={e => setInlineKeyPointsText(e.target.value)}
+                  placeholder={`أدخل النقاط المفتاحية الهامة لهذه الفقرة (سطر لكل نقطة):\nمثال:\nبيع العينة محرم عند جمهور الفقهاء\nيشترط لبيع العينة عودة السلعة للبائع بنفس الثمن أو أقل`}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold leading-relaxed focus:outline-none focus:border-pink-500"
+                />
+
+                <button
+                  onClick={handleSaveInlineKeyPoints}
+                  className="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-xl text-xs font-extrabold shadow-sm btn-press flex items-center gap-1.5"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>حفظ النقاط المفتاحية</span>
+                </button>
+              </div>
+
+              {/* 3.2 INSTANT QUESTIONS ADDITION (PASTE OR SINGLE FORM - NO POPUPS NEEDED!) */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-5">
+                <div className="border-b border-slate-100 pb-3">
+                  <h4 className="font-extrabold text-slate-800 text-base flex items-center gap-2">
+                    <Zap className="w-5 h-5 text-amber-500 fill-amber-400" />
+                    <span>إضافة الأسئلة فوراً لهذه الفقرة:</span>
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    يمكنك لصق مجموعة أسئلة كاملة دفعة واحدة لاستخراجها فوراً، أو إضافة أسئلة فردية مباشرة.
+                  </p>
+                </div>
+
+                {/* Option A: Instant Text Batch Extractor */}
+                <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-amber-900 text-xs flex items-center gap-1.5">
+                      <span>⚡ الطريقة الأسرع: لصق نص أسئلة متعددة واستخراجها فوراً</span>
+                    </span>
+                    <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-full">
+                      تلقائي
+                    </span>
                   </div>
 
-                  {/* Expanded Questions under this paragraph */}
-                  {isExpanded && pQuestions.length > 0 && (
-                    <div className="space-y-3 pt-2 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
-                      {pQuestions.map((q, qIdx) => (
-                        <div
-                          key={q.id}
-                          className="bg-white p-3.5 rounded-2xl border border-slate-200 text-xs space-y-2"
-                        >
+                  <textarea
+                    rows={4}
+                    value={inlineQuestionsPasteText}
+                    onChange={e => setInlineQuestionsPasteText(e.target.value)}
+                    placeholder={`الصق نص الأسئلة هنا بالشكل الطبيعي:\nمثال:\n1) ما هو حكم بيع العينة؟\nأ) واجب\nب) حرام عند الجمهور\nج) مستحب\nد) مباح مطلقاً\nالإجابة الصحيحة: ب\nالتعليل: سداً لذريعة الربا.`}
+                    className="w-full p-3 bg-white border border-amber-200 rounded-xl text-xs font-bold leading-relaxed focus:outline-none focus:border-amber-500"
+                  />
+
+                  <button
+                    onClick={handleBatchExtractInline}
+                    className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-xl text-xs font-black shadow-md btn-press flex items-center gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>⚡ استخراج وإضافة كافة الأسئلة المكتوبة فوراً</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3.3 LIST OF QUESTIONS CURRENTLY ATTACHED TO THIS PARAGRAPH */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <h4 className="font-extrabold text-slate-800 text-sm">
+                    أسئلة هذه الفقرة الحالية ({activeSavedQuestions.length} سؤال):
+                  </h4>
+                  {activeSavedQuestions.length > 0 && (
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full">
+                      جاهزة لاختبارات الطلاب
+                    </span>
+                  )}
+                </div>
+
+                {activeSavedQuestions.length === 0 ? (
+                  <div className="text-center py-6 text-slate-400 text-xs font-bold">
+                    لا توجد أسئلة مضافة بعد لهذه الفقرة. استخدم الخيارات أعلاه لإضافة أول سؤال!
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activeSavedQuestions.map((q, qIdx) => {
+                      const isEditingThisQ = editingQId === q.id;
+
+                      if (isEditingThisQ) {
+                        return (
+                          <div key={q.id} className="p-4 bg-pink-50/70 border-2 border-pink-300 rounded-2xl space-y-3">
+                            <span className="font-bold text-xs text-pink-800">تعديل السؤال #{qIdx + 1}:</span>
+                            <input
+                              type="text"
+                              value={editQText}
+                              onChange={e => setEditQText(e.target.value)}
+                              className="w-full p-2.5 bg-white border border-pink-200 rounded-xl text-xs font-bold"
+                            />
+                            <div className="grid grid-cols-2 gap-2">
+                              {editQOptions.map((opt, oIdx) => (
+                                <div key={oIdx} className="flex items-center gap-1.5 bg-white p-1.5 rounded-lg border border-pink-100 text-xs">
+                                  <input
+                                    type="radio"
+                                    name={`editQRadio_${q.id}`}
+                                    checked={editQCorrectIdx === oIdx}
+                                    onChange={() => setEditQCorrectIdx(oIdx)}
+                                    className="accent-pink-600"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={opt}
+                                    onChange={e => {
+                                      const updated = [...editQOptions];
+                                      updated[oIdx] = e.target.value;
+                                      setEditQOptions(updated);
+                                    }}
+                                    className="w-full bg-transparent font-bold"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                            <input
+                              type="text"
+                              value={editQExplanation}
+                              onChange={e => setEditQExplanation(e.target.value)}
+                              placeholder="التعليل..."
+                              className="w-full p-2 bg-white border border-pink-200 rounded-xl text-xs font-bold"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => setEditingQId(null)}
+                                className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold"
+                              >
+                                إلغاء
+                              </button>
+                              <button
+                                onClick={() => handleSaveEditedQuestion(q.id)}
+                                className="px-4 py-1.5 bg-pink-600 text-white rounded-lg text-xs font-bold"
+                              >
+                                حفظ التعديل
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={q.id} className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 text-xs">
                           <div className="flex items-start justify-between gap-2">
-                            <p className="font-bold text-slate-800">
+                            <p className="font-extrabold text-slate-800">
                               #{qIdx + 1}) {q.questionText}
                             </p>
+
                             <div className="flex items-center gap-1 shrink-0">
                               <button
                                 onClick={() => {
-                                  setEditingQuestion(q);
-                                  setQParagraphId(q.paragraphId);
-                                  setQText(q.questionText);
-                                  setQOptions([...q.options]);
-                                  setQCorrectIdx(q.correctOptionIndex);
-                                  setQExplanation(q.explanation);
-                                  setQSourceType(q.sourceType);
-                                  setShowQuestionAddCard(true);
-                                  setActiveTab('questions');
-                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  setEditingQId(q.id);
+                                  setEditQText(q.questionText);
+                                  setEditQOptions([...q.options]);
+                                  setEditQCorrectIdx(q.correctOptionIndex);
+                                  setEditQExplanation(q.explanation);
                                 }}
-                                className="p-1 text-slate-400 hover:text-pink-600"
+                                className="p-1.5 text-slate-500 hover:text-pink-600 hover:bg-pink-100 rounded-lg transition-colors"
+                                title="تعديل هذا السؤال"
                               >
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
+
                               <button
                                 onClick={() =>
                                   setConfirmDeleteModal({
@@ -1139,411 +880,220 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                     targetId: q.id,
                                   })
                                 }
-                                className="p-1 text-slate-400 hover:text-rose-600"
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded-lg transition-colors"
+                                title="حذف هذا السؤال"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </div>
-                          <div className="grid grid-cols-2 gap-1 text-[11px] text-slate-600">
+
+                          <div className="grid grid-cols-2 gap-1.5 text-[11px] text-slate-600">
                             {q.options.map((opt, oIdx) => (
                               <span
                                 key={oIdx}
-                                className={oIdx === q.correctOptionIndex ? 'font-bold text-emerald-700' : ''}
+                                className={`px-2 py-1 rounded-lg ${
+                                  oIdx === q.correctOptionIndex
+                                    ? 'bg-emerald-100 text-emerald-800 font-extrabold border border-emerald-200'
+                                    : 'bg-white border border-slate-100'
+                                }`}
                               >
-                                • {opt}
+                                {['أ', 'ب', 'ج', 'د'][oIdx]}) {opt}
                               </span>
                             ))}
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
-      {/* ========================================================= */}
-      {/* TAB 3: QUESTIONS MANAGEMENT (خانة إدارة كافة الأسئلة) */}
-      {/* ========================================================= */}
-      {activeTab === 'questions' && (
-        <div className="space-y-6">
-          {/* Button or Form to add single question manually */}
-          <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-pink-100 text-pink-600 rounded-xl">
-                  <HelpCircle className="w-5 h-5" />
-                </div>
-                <h3 className="font-extrabold text-slate-800 text-base">
-                  {editingQuestion ? 'تعديل السؤال الحالي:' : 'إضافة سؤال يدوياً:'}
-                </h3>
-              </div>
-
-              {!showQuestionAddCard && !editingQuestion && (
-                <button
-                  onClick={() => setShowQuestionAddCard(true)}
-                  className="px-4 py-2 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-xl text-xs font-bold border border-pink-200 btn-press"
-                >
-                  + إظهار نموذج إضافة سؤال
-                </button>
-              )}
-            </div>
-
-            {(showQuestionAddCard || editingQuestion) && (
-              <form onSubmit={handleSaveSingleQuestion} className="space-y-4 pt-2 border-t border-slate-100">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">1. المادة:</label>
-                    <select
-                      value={qSubjectId}
-                      onChange={e => {
-                        const subjId = e.target.value;
-                        setQSubjectId(subjId);
-                        const match = paragraphs.filter(p => p.subjectId === subjId);
-                        if (match.length > 0) setQParagraphId(match[0].id);
-                      }}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
-                    >
-                      {subjects.map(s => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">2. الفقرة التابعة:</label>
-                    <select
-                      value={qParagraphId}
-                      onChange={e => setQParagraphId(e.target.value)}
-                      required
-                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
-                    >
-                      {filteredQParagraphs.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.title}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold text-slate-700 block">3. نوع السؤال:</label>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setQSourceType('paragraph')}
-                        className={`flex-1 py-2 rounded-xl text-xs font-extrabold ${
-                          qSourceType === 'paragraph'
-                            ? 'bg-pink-500 text-white'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        سؤال فقرة
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setQSourceType('table')}
-                        className={`flex-1 py-2 rounded-xl text-xs font-extrabold ${
-                          qSourceType === 'table' ? 'bg-orange-500 text-white' : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        سؤال جدول
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700 block">نص السؤال:</label>
-                  <input
-                    type="text"
-                    value={qText}
-                    onChange={e => setQText(e.target.value)}
-                    placeholder="أدخل نص السؤال..."
-                    required
-                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-700 block">
-                    الخيارات الأربعة (حدد الدائرة بقرب الخيار الصحيح):
-                  </label>
-                  {qOptions.map((opt, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name="correctOptSelect"
-                        checked={qCorrectIdx === idx}
-                        onChange={() => setQCorrectIdx(idx)}
-                        className="w-4 h-4 text-pink-600 focus:ring-pink-500"
-                      />
-                      <input
-                        type="text"
-                        value={opt}
-                        onChange={e => {
-                          const newOpts = [...qOptions];
-                          newOpts[idx] = e.target.value;
-                          setQOptions(newOpts);
-                        }}
-                        placeholder={`الخيار ${['أ', 'ب', 'ج', 'د'][idx]}...`}
-                        className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-700 block">التعليل الفقهي:</label>
-                  <input
-                    type="text"
-                    value={qExplanation}
-                    onChange={e => setQExplanation(e.target.value)}
-                    placeholder="أدخل التعليل الفقهي لتوضيح سبب الخيار الصحيح..."
-                    className="w-full p-2.5 bg-orange-50/60 border border-orange-200 rounded-xl text-xs"
-                  />
-                </div>
-
-                <div className="flex gap-2 justify-end pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingQuestion(null);
-                      setShowQuestionAddCard(false);
-                    }}
-                    className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200"
-                  >
-                    إغلاق النموذج
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-6 py-2 bg-pink-600 text-white rounded-xl text-xs font-extrabold hover:bg-pink-700 btn-press"
-                  >
-                    {editingQuestion ? 'تحديث السؤال' : 'حفظ السؤال'}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-
-          {/* Search & Filter bar for questions */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="relative w-full md:w-80">
-              <Search className="w-4 h-4 absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="بحث نصي في الأسئلة أو الخيارات أو التعليل..."
-                className="w-full pr-10 pl-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs focus:outline-none focus:border-pink-500 focus:bg-white transition-all"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <select
-                value={selectedSubjectIdFilter}
-                onChange={e => setSelectedSubjectIdFilter(e.target.value)}
-                className="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 focus:outline-none focus:border-pink-500"
-              >
-                <option value="all">جميع المواد ({questions.length} سؤال)</option>
-                {subjects.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-
-              {selectedQuestionIds.length > 0 && (
-                <button
-                  onClick={() =>
-                    setConfirmDeleteModal({
-                      isOpen: true,
-                      type: 'batch_questions',
-                      count: selectedQuestionIds.length,
-                    })
-                  }
-                  className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-extrabold shadow-sm btn-press flex items-center gap-1.5"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  <span>حذف المحدد ({selectedQuestionIds.length})</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Select All Checkbox */}
-          <div className="flex items-center justify-between px-2 text-xs font-bold text-slate-600">
-            <button
-              onClick={handleToggleSelectAll}
-              className="flex items-center gap-2 hover:text-pink-600"
-            >
-              {selectedQuestionIds.length === filteredQuestions.length && filteredQuestions.length > 0 ? (
-                <CheckSquare className="w-4 h-4 text-pink-600" />
-              ) : (
-                <Square className="w-4 h-4 text-slate-400" />
-              )}
-              <span>تحديد كافة الأسئلة المعروضة ({filteredQuestions.length})</span>
-            </button>
-          </div>
-
-          {/* Questions List */}
-          <div className="space-y-4">
-            {filteredQuestions.length === 0 ? (
-              <div className="text-center py-16 bg-white rounded-3xl border border-dashed border-slate-200 text-slate-400 space-y-2">
-                <HelpCircle className="w-10 h-10 mx-auto text-slate-300" />
-                <p className="text-sm font-bold">لا يوجد أسئلة مطابقة للبحث</p>
-              </div>
-            ) : (
-              filteredQuestions.map((q, qIdx) => {
-                const isSelected = selectedQuestionIds.includes(q.id);
-                const para = paragraphs.find(p => p.id === q.paragraphId);
-                const subj = subjects.find(s => s.id === para?.subjectId);
-
-                return (
-                  <div
-                    key={q.id}
-                    className={`bg-white rounded-3xl p-5 border transition-all space-y-3 ${
-                      isSelected ? 'border-pink-500 bg-pink-50/20 shadow-md' : 'border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2.5">
-                        <button
-                          onClick={() => handleToggleSelectQuestion(q.id)}
-                          className="text-pink-600 hover:opacity-80 transition-opacity"
-                        >
-                          {isSelected ? (
-                            <CheckSquare className="w-5 h-5 text-pink-600" />
-                          ) : (
-                            <Square className="w-5 h-5 text-slate-400" />
+                          {q.explanation && (
+                            <p className="text-[10px] text-slate-500 font-medium pt-1">
+                              💡 الشرح: {q.explanation}
+                            </p>
                           )}
-                        </button>
-                        <span className="text-xs font-extrabold text-pink-700 bg-pink-100 px-3 py-0.5 rounded-full">
-                          سؤال #{qIdx + 1}
-                        </span>
-                        <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-full">
-                          {subj?.name} / {para?.title}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => {
-                            setEditingQuestion(q);
-                            setQParagraphId(q.paragraphId);
-                            setQText(q.questionText);
-                            setQOptions([...q.options]);
-                            setQCorrectIdx(q.correctOptionIndex);
-                            setQExplanation(q.explanation);
-                            setQSourceType(q.sourceType);
-                            setShowQuestionAddCard(true);
-                            window.scrollTo({ top: 0, behavior: 'smooth' });
-                          }}
-                          className="p-1.5 text-slate-500 hover:text-pink-600 hover:bg-pink-50 rounded-lg transition-colors"
-                          title="تعديل السؤال"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-
-                        <button
-                          onClick={() =>
-                            setConfirmDeleteModal({
-                              isOpen: true,
-                              type: 'single_question',
-                              targetId: q.id,
-                            })
-                          }
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                          title="حذف السؤال وسحبه للسلة"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <h4 className="font-bold text-slate-800 text-sm leading-relaxed pr-7">
-                      {q.questionText}
-                    </h4>
-
-                    {/* Options */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pr-7">
-                      {q.options.map((opt, optIdx) => {
-                        const isCorrect = optIdx === q.correctOptionIndex;
-                        return (
-                          <div
-                            key={optIdx}
-                            className={`p-2.5 rounded-xl border ${
-                              isCorrect
-                                ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold'
-                                : 'bg-slate-50 border-slate-100 text-slate-600'
-                            }`}
-                          >
-                            <span>
-                              {['أ', 'ب', 'ج', 'د', 'هـ'][optIdx] || optIdx + 1}) {opt}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Explanation */}
-                    {q.explanation && (
-                      <p className="text-xs text-orange-900 bg-orange-50/70 p-2.5 rounded-xl border border-orange-200 pr-7">
-                        💡 <strong>التعليل:</strong> {q.explanation}
-                      </p>
-                    )}
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* TAB 4: DEDICATED TABLES & COMPARISONS (خانة الجداول والمقارنات) */}
-      {/* ========================================================= */}
-      {activeTab === 'tables' && (
-        <div className="space-y-6">
-          {/* Create / Edit Table Form */}
-          <form
-            onSubmit={handleSaveTableDedicated}
-            className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-sm space-y-5"
-          >
-            <div className="flex items-center gap-2">
-              <div className="p-2.5 bg-orange-100 text-orange-600 rounded-2xl">
-                <TableIcon className="w-5 h-5" />
+                )}
               </div>
+            </div>
+          ) : (
+            <div className="p-6 bg-slate-50 border border-dashed border-slate-300 rounded-3xl text-center space-y-2">
+              <Sparkles className="w-8 h-8 text-pink-400 mx-auto" />
+              <h4 className="font-extrabold text-slate-700 text-sm">لم يتم تحديد فقرة مفعلة بعد</h4>
+              <p className="text-xs text-slate-500">
+                احفظ فقرة جديدة أعلاه أو اختر فقرة سابقة أدناه لفتح واجهة إضافة أسئلتها ونقاطها المفتاحية.
+              </p>
+            </div>
+          )}
+
+          {/* SECTION 4: HIERARCHICAL MANAGEMENT TREE (المواد -> الفقرات -> الأسئلة) */}
+          <div className="space-y-4 pt-4 border-t border-slate-200">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm">
               <div>
                 <h3 className="font-black text-slate-800 text-base">
-                  {editingTableParagraphId ? 'تعديل جدول المقارنة الحالي:' : 'إضافة جدول مقارنة جديد (كصورة أو جدول نصي):'}
+                  3️⃣ شجرة استعراض وتعديل وحذف المحتوى الشامل:
                 </h3>
                 <p className="text-xs text-slate-500">
-                  يمكنك رفع صورة الجداول الجاهزة مباشرة أو إدخال جدول نصي منظم ورابطه بأي فقرة في أي مادة.
+                  عرض جميع المواد والفقرات والأسئلة مع إمكانية تعديل أي عنصر أو حذفه بنقرة واحدة.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 w-full md:w-auto">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="ابحث بالنصوص..."
+                  className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold w-full md:w-48"
+                />
+
+                <select
+                  value={selectedSubjectIdFilter}
+                  onChange={e => setSelectedSubjectIdFilter(e.target.value)}
+                  className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
+                >
+                  <option value="all">كل المواد ({subjects.length})</option>
+                  {subjects.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {subjects
+                .filter(s => selectedSubjectIdFilter === 'all' || s.id === selectedSubjectIdFilter)
+                .map(subj => {
+                  const subjParas = paragraphs.filter(p => p.subjectId === subj.id);
+
+                  return (
+                    <div key={subj.id} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm space-y-3">
+                      {/* Subject Row */}
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <BookOpen className="w-5 h-5 text-pink-500" />
+                          <h4 className="font-black text-slate-800 text-base">{subj.name}</h4>
+                          <span className="text-xs text-slate-500 font-bold bg-slate-100 px-2.5 py-0.5 rounded-full">
+                            {subjParas.length} فقرة
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleEditSubjectClick(subj)}
+                            className="px-3 py-1 bg-slate-100 hover:bg-pink-50 text-slate-700 hover:text-pink-600 rounded-lg text-xs font-bold"
+                          >
+                            تعديل الاسم
+                          </button>
+                          <button
+                            onClick={() =>
+                              setConfirmDeleteModal({
+                                isOpen: true,
+                                type: 'subject',
+                                targetId: subj.id,
+                              })
+                            }
+                            className="p-1 text-slate-400 hover:text-rose-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Paragraphs under this subject */}
+                      <div className="space-y-2 pr-4">
+                        {subjParas.length === 0 ? (
+                          <p className="text-xs text-slate-400 font-bold">لا توجد فقرات لهذه المادة بعد.</p>
+                        ) : (
+                          subjParas.map(p => {
+                            const pQuestions = questions.filter(q => q.paragraphId === p.id);
+                            const isSelectedForWorkstation = activeSavedParagraphId === p.id;
+
+                            return (
+                              <div
+                                key={p.id}
+                                className={`p-3.5 rounded-2xl border transition-all ${
+                                  isSelectedForWorkstation
+                                    ? 'bg-pink-50/80 border-pink-300'
+                                    : 'bg-slate-50/80 border-slate-200'
+                                } flex flex-col sm:flex-row sm:items-center justify-between gap-2`}
+                              >
+                                <div>
+                                  <h5 className="font-extrabold text-slate-800 text-xs">{p.title}</h5>
+                                  <span className="text-[10px] text-slate-500 font-bold">
+                                    {pQuestions.length} أسئلة مضافة
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    onClick={() => handleSelectParagraphForWorkstation(p)}
+                                    className="px-3 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg text-xs font-extrabold shadow-xs btn-press"
+                                  >
+                                    تعديل وإضافة الأسئلة
+                                  </button>
+
+                                  <button
+                                    onClick={() =>
+                                      setConfirmDeleteModal({
+                                        isOpen: true,
+                                        type: 'paragraph',
+                                        targetId: p.id,
+                                      })
+                                    }
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* TAB 2: TABLES & COMPARISONS (خانة الجداول والمقارنات) */}
+      {/* ========================================================= */}
+      {activeTab === 'tables' && (
+        <div className="space-y-6 animate-fade-in">
+          {/* Add / Edit Table Form */}
+          <form
+            onSubmit={handleSaveTable}
+            className="bg-white p-6 rounded-3xl border border-orange-200/90 shadow-sm space-y-5"
+          >
+            <div className="flex items-center gap-2 border-b border-orange-100 pb-3">
+              <div className="p-2.5 bg-orange-100 text-orange-600 rounded-2xl">
+                <TableIcon className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-800 text-base">
+                  {editingTableParagraphId ? '✏️ تعديل جدول المقارنة الحالي:' : 'إضافة جدول مقارنة جديد (كصورة أو جدول نصي):'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {editingTableParagraphId
+                    ? 'يمكنك معاينة الجدول المضاف حالياً، تغيير الصورة أو حذفها، وتحديث العنوان أو الجداول النصية.'
+                    : 'يمكنك رفع صورة الجداول الجاهزة مباشرة أو إدخال جدول نصي منظم ورابطه بأي فقرة في أي مادة.'}
                 </p>
               </div>
             </div>
 
-            {/* Select Subject & Paragraph */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-orange-50/50 p-4 rounded-2xl border border-orange-100">
-              <div className="space-y-1">
-                <label className="text-xs font-extrabold text-orange-950 block">1. اختر المادة:</label>
+            {/* Select Subject & Paragraph for Table */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">المادة الدراسية:</label>
                 <select
                   value={tblSubjectId}
-                  onChange={e => {
-                    const subjId = e.target.value;
-                    setTblSubjectId(subjId);
-                    const match = paragraphs.filter(p => p.subjectId === subjId);
-                    if (match.length > 0) setTblParagraphId(match[0].id);
-                  }}
-                  required
-                  className="w-full p-3 bg-white border border-orange-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500 shadow-xs"
+                  onChange={e => setTblSubjectId(e.target.value)}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
                 >
                   {subjects.map(s => (
                     <option key={s.id} value={s.id}>
@@ -1553,13 +1103,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </select>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-extrabold text-orange-950 block">2. اختر الفقرة التابع لها الجدول:</label>
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">الفقرة التابع لها الجدول:</label>
                 <select
                   value={tblParagraphId}
                   onChange={e => setTblParagraphId(e.target.value)}
                   required
-                  className="w-full p-3 bg-white border border-orange-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-orange-500 shadow-xs"
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800"
                 >
                   {filteredTblParagraphs.map(p => (
                     <option key={p.id} value={p.id}>
@@ -1570,29 +1120,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </div>
 
-            {/* Table Title Input */}
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-700 block">عنوان الجدول / موضوع المقارنة:</label>
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">عنوان الجدول / موضوع المقارنة:</label>
               <input
                 type="text"
                 value={tblTitleInput}
                 onChange={e => setTblTitleInput(e.target.value)}
-                placeholder="مثال: جدول مقارنة الشافعية والحنفية في أحكام بيع العينة..."
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold focus:outline-none focus:border-orange-500"
+                placeholder="مثال: جدول المقارنة بين الشروط والأركان..."
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold"
               />
             </div>
 
-            {/* IMAGE SECTION FOR TABLE ("و بدي ضيف الجدول ك صورة") */}
-            <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <label className="text-xs font-black text-orange-950 flex items-center gap-1.5">
-                  <Image className="w-4 h-4 text-orange-600" />
-                  <span>📷 إضافة الجدول كصورة (رفع ملف من الجهاز أو رابط صورة):</span>
-                </label>
+            {/* IMAGE TABLE UPLOAD SECTION */}
+            <div className="p-4 bg-orange-50/50 border border-orange-200/80 rounded-2xl space-y-3">
+              <label className="text-xs font-extrabold text-orange-900 block">
+                رفع صورة الجدول جاهزة (مستحسن لسهولة العرض):
+              </label>
 
-                <label className="cursor-pointer px-3.5 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all btn-press">
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <input
+                  type="text"
+                  value={tblImageUrlInput}
+                  onChange={e => setTblImageUrlInput(e.target.value)}
+                  placeholder="أدخل رابط صورة مباشر أو ارفع صورة من أجهزتك..."
+                  className="flex-1 p-3 bg-white border border-orange-200 rounded-xl text-xs font-bold"
+                />
+
+                <label className="cursor-pointer px-3.5 py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-all btn-press shrink-0">
                   <Upload className="w-3.5 h-3.5" />
-                  <span>اختر صورة من الجهاز</span>
+                  <span>{tblImageUrlInput ? 'تغيير الصورة / رفع جديدة' : 'اختر صورة من الجهاز'}</span>
                   <input
                     type="file"
                     accept="image/*"
@@ -1602,35 +1158,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </label>
               </div>
 
-              <div className="space-y-1">
-                <input
-                  type="text"
-                  value={tblImageUrlInput}
-                  onChange={e => setTblImageUrlInput(e.target.value)}
-                  placeholder="أو ضع رابط صورة الجدول مباشرة (http/https)..."
-                  className="w-full p-2.5 bg-white border border-orange-200 rounded-xl text-xs font-mono focus:outline-none"
-                />
-              </div>
-
               {/* Image Preview Box */}
               {tblImageUrlInput && (
-                <div className="relative border border-orange-200 rounded-2xl p-3 bg-white text-center max-w-md mx-auto space-y-2">
-                  <span className="text-[10px] font-bold text-orange-700 bg-orange-50 px-2.5 py-0.5 rounded-full inline-block">
-                    معاينة صورة الجدول
-                  </span>
+                <div className="relative border border-orange-200 rounded-2xl p-4 bg-white text-center max-w-md mx-auto space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between text-xs border-b border-orange-100 pb-2">
+                    <span className="font-extrabold text-orange-800 flex items-center gap-1">
+                      🖼️ معاينة صورة الجدول الحالية:
+                    </span>
+                    <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full">
+                      مرفقة بالجدول
+                    </span>
+                  </div>
                   <img
                     src={tblImageUrlInput}
                     alt="معاينة صورة الجدول"
-                    className="max-h-48 mx-auto object-contain rounded-xl border border-slate-100 shadow-xs"
+                    className="max-h-56 mx-auto object-contain rounded-xl border border-slate-100 shadow-xs"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setTblImageUrlInput('')}
-                    className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1 mx-auto"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>حذف الصورة</span>
-                  </button>
+                  <div className="pt-1 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTblImageUrlInput('')}
+                      className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-extrabold rounded-xl transition-colors flex items-center gap-1.5 border border-rose-200 shadow-xs btn-press"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>حذف الصورة نهائياً</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1660,28 +1213,48 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
 
             {/* Submit & Reset Buttons */}
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              {editingTableParagraphId && (
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              {editingTableParagraphId ? (
                 <button
                   type="button"
                   onClick={() => {
-                    setEditingTableParagraphId(null);
-                    setTblTitleInput('');
-                    setTblImageUrlInput('');
-                    setTblHeadersInput('');
-                    setTblRowsInput('');
+                    setConfirmDeleteModal({
+                      isOpen: true,
+                      type: 'table',
+                      targetId: tblParagraphId,
+                    });
                   }}
-                  className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200"
+                  className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 transition-colors flex items-center gap-1.5 btn-press"
                 >
-                  إلغاء التعديل
+                  <Trash2 className="w-4 h-4" />
+                  <span>حذف هذا الجدول بالكامل</span>
                 </button>
-              )}
-              <button
-                type="submit"
-                className="px-6 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white rounded-xl text-xs font-extrabold shadow-md btn-press"
-              >
-                {editingTableParagraphId ? 'تعديل بيانات الجدول' : 'حفظ وإضافة الجدول للفقرة المختارة'}
-              </button>
+              ) : <div />}
+
+              <div className="flex items-center gap-2">
+                {editingTableParagraphId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingTableParagraphId(null);
+                      setTblTitleInput('');
+                      setTblImageUrlInput('');
+                      setTblHeadersInput('');
+                      setTblRowsInput('');
+                    }}
+                    className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200"
+                  >
+                    تفريغ الحقول
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-black shadow-md btn-press flex items-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{editingTableParagraphId ? 'تعديل وحفظ بيانات الجدول' : 'حفظ وإضافة الجدول للفقرة المختارة'}</span>
+                </button>
+              </div>
             </div>
           </form>
 
@@ -1784,10 +1357,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* TAB 4: TRASH CAN (سلة المحذوفات) */}
+      {/* TAB 3: TRASH CAN (سلة المحذوفات) */}
       {/* ========================================================= */}
       {activeTab === 'trash' && (
-        <div className="space-y-6">
+        <div className="space-y-6 animate-fade-in">
           <div className="bg-white p-5 rounded-3xl border border-slate-200/90 shadow-sm flex items-center justify-between">
             <div>
               <h3 className="font-extrabold text-slate-800 text-sm">
@@ -1869,6 +1442,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <h3 className="text-lg font-black text-slate-800">
               {confirmDeleteModal.type === 'empty_trash'
                 ? 'إفراغ سلة المحذوفات نهائياً؟'
+                : confirmDeleteModal.type === 'table'
+                ? 'تأكيد حذف جدول المقارنة؟'
                 : `متأكد إنك بدك تحذف ${
                     confirmDeleteModal.count ? `${confirmDeleteModal.count} سؤال` : 'هذا العنصر'
                   }؟`}

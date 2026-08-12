@@ -132,7 +132,13 @@ export class DBStore {
     const target = subjects.find(s => s.id === subjectId);
     if (!target) return;
 
-    // Move to trash
+    // Delete all paragraphs belonging to this subject
+    const childParas = this.getParagraphs(subjectId);
+    childParas.forEach(p => {
+      this.deleteParagraph(p.id);
+    });
+
+    // Move subject to trash
     this.addToTrash({
       id: 'trash-' + Date.now(),
       itemType: 'subject',
@@ -208,6 +214,23 @@ export class DBStore {
     const target = paragraphs.find(p => p.id === paragraphId);
     if (!target) return;
 
+    // Delete table data for this paragraph
+    const tables = getItem<TableData[]>(KEYS.TABLES, INITIAL_TABLES);
+    if (tables.some(t => t.paragraphId === paragraphId)) {
+      this.deleteTableData(paragraphId);
+    }
+
+    // Delete questions for this paragraph
+    const questions = this.getQuestions(paragraphId);
+    if (questions.length > 0) {
+      this.deleteQuestionsBatch(questions.map(q => q.id));
+    }
+
+    // Delete key points for this paragraph
+    const keyPoints = getItem<KeyPoint[]>(KEYS.KEY_POINTS, INITIAL_KEY_POINTS);
+    const updatedKps = keyPoints.filter(kp => kp.paragraphId !== paragraphId);
+    setItem(KEYS.KEY_POINTS, updatedKps);
+
     this.addToTrash({
       id: 'trash-' + Date.now(),
       itemType: 'paragraph',
@@ -266,6 +289,13 @@ export class DBStore {
     const tables = getItem<TableData[]>(KEYS.TABLES, INITIAL_TABLES);
     const existingIdx = tables.findIndex(t => t.paragraphId === paragraphId);
 
+    const hasContent = headers.length > 0 || rows.length > 0 || Boolean(imageUrl);
+
+    if (!hasContent) {
+      this.deleteTableData(paragraphId);
+      return;
+    }
+
     const updatedTable: TableData = {
       id: existingIdx !== -1 ? tables[existingIdx].id : 'tbl-' + Date.now(),
       paragraphId,
@@ -281,12 +311,11 @@ export class DBStore {
       tables.push(updatedTable);
     }
 
-    // Set hasTable on paragraph to true if headers/rows or image exists
-    const hasContent = headers.length > 0 || rows.length > 0 || Boolean(imageUrl);
+    // Set hasTable on paragraph to true
     const paragraphs = this.getParagraphs();
     const pIdx = paragraphs.findIndex(p => p.id === paragraphId);
     if (pIdx !== -1) {
-      paragraphs[pIdx].hasTable = hasContent;
+      paragraphs[pIdx].hasTable = true;
       setItem(KEYS.PARAGRAPHS, paragraphs);
     }
 
@@ -296,6 +325,16 @@ export class DBStore {
 
   static deleteTableData(paragraphId: string) {
     const tables = getItem<TableData[]>(KEYS.TABLES, INITIAL_TABLES);
+    const tbl = tables.find(t => t.paragraphId === paragraphId);
+    if (tbl) {
+      this.addToTrash({
+        id: 'trash-tbl-' + Date.now(),
+        itemType: 'table',
+        itemData: tbl,
+        deletedAt: new Date().toLocaleDateString('ar-SA') + ' - ' + new Date().toLocaleTimeString('ar-SA'),
+        label: `جدول مقارنة: ${tbl.title || 'بدون عنوان'}`,
+      });
+    }
     const filtered = tables.filter(t => t.paragraphId !== paragraphId);
     setItem(KEYS.TABLES, filtered);
 
@@ -405,6 +444,27 @@ export class DBStore {
     return saved;
   }
 
+  static addQuestion(qData: Partial<Question> & { paragraphId: string; questionText: string; options: string[]; correctOptionIndex: number }): Question {
+    return this.saveQuestion(qData);
+  }
+
+  static updateQuestion(qId: string, updates: Partial<Question>): Question {
+    const questions = this.getAllQuestions();
+    const existing = questions.find(q => q.id === qId);
+    if (!existing) {
+      throw new Error('Question not found');
+    }
+    return this.saveQuestion({
+      ...existing,
+      ...updates,
+      id: qId,
+    });
+  }
+
+  static deleteQuestion(questionId: string) {
+    this.deleteQuestionsBatch([questionId]);
+  }
+
   static deleteQuestionsBatch(questionIds: string[]) {
     if (questionIds.length === 0) return;
     const allQuestions = this.getAllQuestions();
@@ -467,6 +527,10 @@ export class DBStore {
     return getItem<TrashItem[]>(KEYS.TRASH, []);
   }
 
+  static getTrashItems(): TrashItem[] {
+    return this.getTrash();
+  }
+
   static addToTrash(item: TrashItem) {
     const trash = this.getTrash();
     trash.unshift(item);
@@ -490,6 +554,17 @@ export class DBStore {
       const questions = this.getAllQuestions();
       questions.push(item.itemData as Question);
       setItem(KEYS.QUESTIONS, questions);
+    } else if (item.itemType === 'table') {
+      const tables = this.getAllTables();
+      tables.push(item.itemData as TableData);
+      setItem(KEYS.TABLES, tables);
+
+      const paragraphs = this.getParagraphs();
+      const pIdx = paragraphs.findIndex(p => p.id === (item.itemData as TableData).paragraphId);
+      if (pIdx !== -1) {
+        paragraphs[pIdx].hasTable = true;
+        setItem(KEYS.PARAGRAPHS, paragraphs);
+      }
     }
 
     const updatedTrash = trash.filter(t => t.id !== trashId);

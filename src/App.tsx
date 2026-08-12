@@ -81,6 +81,8 @@ export default function App() {
   };
 
   const handleSelectParagraph = (paragraphId: string, initialMode: 'paragraph' | 'table' = 'paragraph') => {
+    setQuestions(DBStore.getAllQuestions());
+    setTables(DBStore.getAllTables());
     setSelectedParagraphId(paragraphId);
     setParagraphInitialMode(initialMode);
     setCurrentView('paragraph_detail');
@@ -147,6 +149,7 @@ export default function App() {
             questions={questions}
             onSelectSubject={handleSelectSubject}
             userAnswers={userAnswers}
+            onOpenAdminLogin={() => (isAdmin ? setCurrentView('admin') : setIsAdminLoginOpen(true))}
           />
         )}
 

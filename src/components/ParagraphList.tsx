@@ -128,6 +128,13 @@ export const ParagraphList: React.FC<ParagraphListProps> = ({
                   q => q.paragraphId === para.id && q.sourceType === 'table'
                 );
 
+                const paraTableData = tables.find(t => t.paragraphId === para.id);
+                const hasTable = Boolean(
+                  para.hasTable ||
+                  (paraTableData && (Boolean(paraTableData.imageUrl) || (paraTableData.headers && paraTableData.headers.length > 0) || (paraTableData.rows && paraTableData.rows.length > 0))) ||
+                  tblQuestions.length > 0
+                );
+
                 const answeredParaQCount = paraQuestions.filter(
                   q => userAnswers[q.id] !== undefined
                 ).length;
@@ -144,7 +151,7 @@ export const ParagraphList: React.FC<ParagraphListProps> = ({
                           <span className="text-xs font-black text-pink-600 bg-pink-100 px-3 py-1 rounded-full">
                             فقرة #{idx + 1}
                           </span>
-                          {para.hasTable && (
+                          {hasTable && (
                             <span className="text-xs font-bold text-orange-600 bg-orange-100 px-3 py-1 rounded-full flex items-center gap-1">
                               <TableIcon className="w-3.5 h-3.5" /> تتضمن جدول مقارنة
                             </span>
@@ -181,17 +188,21 @@ export const ParagraphList: React.FC<ParagraphListProps> = ({
                         <span>أسئلة ({paraQuestions.length})</span>
                       </button>
 
-                      {/* Button 2: جدول (مع زر أسئلة للجدول وقت نفوت عليه) */}
+                      {/* Button 2: جدول (برتقالي إذا منضاف جدول، رمادي إذا ما في) */}
                       <button
                         onClick={() => setActiveTableParagraphId(para.id)}
                         className={`flex-1 min-w-[120px] py-3 px-4 text-xs font-extrabold rounded-2xl shadow-sm btn-press flex items-center justify-center gap-2 transition-all ${
-                          para.hasTable
-                            ? 'bg-gradient-to-r from-orange-400 to-amber-500 hover:from-orange-500 hover:to-amber-600 text-white'
-                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                          hasTable
+                            ? 'bg-gradient-to-r from-orange-400 to-amber-500 hover:from-orange-500 hover:to-amber-600 text-white border border-orange-400/50'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-500 border border-slate-200 shadow-none'
                         }`}
                       >
-                        <TableIcon className="w-4 h-4" />
-                        <span>جدول المقارنة {para.hasTable ? `(${tblQuestions.length} سؤال)` : ''}</span>
+                        <TableIcon className={`w-4 h-4 ${hasTable ? 'text-white' : 'text-slate-400'}`} />
+                        <span>
+                          {hasTable
+                            ? `جدول المقارنة ${tblQuestions.length > 0 ? `(${tblQuestions.length} سؤال)` : ''}`
+                            : 'جدول المقارنة (غير متاح)'}
+                        </span>
                       </button>
 
                       {/* Button 3: نقاط مفتاحية */}
@@ -295,7 +306,7 @@ export const ParagraphList: React.FC<ParagraphListProps> = ({
                 </div>
               )}
 
-              {/* CRITICAL USER REQUIREMENT: "جدول مع زر اسئلة للجدول وقت نفوت عليه" */}
+              {/* CRITICAL USER REQUIREMENT: "زر اختبرني بهذا الجدول لا يطلع بلوحة المستخدم الا اذا كنت انا ضايفة اسئلة بخانة الجدول عند الادمن" */}
               <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <p className="text-xs text-slate-500 font-bold">
                   عدد أسئلة هذا الجدول: <strong className="text-orange-600">{tableQuestions.length} أسئلة</strong>
@@ -309,17 +320,23 @@ export const ParagraphList: React.FC<ParagraphListProps> = ({
                     إغلاق الجدول
                   </button>
 
-                  <button
-                    onClick={() => {
-                      const pId = activeTableParagraphId;
-                      setActiveTableParagraphId(null);
-                      if (pId) onSelectParagraph(pId, 'table');
-                    }}
-                    className="flex-1 sm:flex-none px-6 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-extrabold shadow-md btn-press flex items-center justify-center gap-2"
-                  >
-                    <HelpCircle className="w-4 h-4" />
-                    <span>اختبرني بأسئلة هذا الجدول ({tableQuestions.length})</span>
-                  </button>
+                  {tableQuestions.length > 0 ? (
+                    <button
+                      onClick={() => {
+                        const pId = activeTableParagraphId;
+                        setActiveTableParagraphId(null);
+                        if (pId) onSelectParagraph(pId, 'table');
+                      }}
+                      className="flex-1 sm:flex-none px-6 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-xs font-extrabold shadow-md btn-press flex items-center justify-center gap-2"
+                    >
+                      <HelpCircle className="w-4 h-4" />
+                      <span>اختبرني بأسئلة هذا الجدول ({tableQuestions.length})</span>
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 font-medium bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                      (لا يوجد أسئلة جدول مضافة لهذه الفقرة بعد)
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -380,24 +397,12 @@ export const ParagraphList: React.FC<ParagraphListProps> = ({
               )}
 
               {/* Modal Footer */}
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-3">
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end">
                 <button
                   onClick={() => setActiveKeyPointsParagraphId(null)}
-                  className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200"
+                  className="px-6 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-200"
                 >
                   إغلاق
-                </button>
-
-                <button
-                  onClick={() => {
-                    const pId = activeKeyPointsParagraphId;
-                    setActiveKeyPointsParagraphId(null);
-                    if (pId) onSelectParagraph(pId, 'paragraph');
-                  }}
-                  className="px-6 py-2.5 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white rounded-xl text-xs font-extrabold shadow-md btn-press flex items-center gap-2"
-                >
-                  <HelpCircle className="w-4 h-4" />
-                  <span>بدء حل الأسئلة الآن</span>
                 </button>
               </div>
             </div>

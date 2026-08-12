@@ -119,7 +119,7 @@ export const ParagraphView: React.FC<ParagraphViewProps> = ({
         )}
 
         {/* SECTION 3.4: Table rendering if present */}
-        {paragraph.hasTable && tableData && (
+        {Boolean(tableData) && (
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-extrabold text-orange-700">
@@ -127,7 +127,8 @@ export const ParagraphView: React.FC<ParagraphViewProps> = ({
                 <span>{tableData.title || 'جدول المقارنة والتفاصيل:'}</span>
               </div>
 
-              {/* Mode switch button */}
+            {/* Mode switch button - Only show if table questions exist */}
+            {questions.filter(q => q.sourceType === 'table').length > 0 && (
               <button
                 onClick={() => {
                   setActiveSourceType('table');
@@ -138,6 +139,7 @@ export const ParagraphView: React.FC<ParagraphViewProps> = ({
                 <HelpCircle className="w-3.5 h-3.5" />
                 <span>اختبرني بهذا الجدول</span>
               </button>
+            )}
             </div>
 
             {/* Render Table Image if uploaded */}
@@ -205,7 +207,7 @@ export const ParagraphView: React.FC<ParagraphViewProps> = ({
           <span>أسئلة الفقرة ({questions.filter(q => q.sourceType === 'paragraph').length})</span>
         </button>
 
-        {paragraph.hasTable && (
+        {questions.filter(q => q.sourceType === 'table').length > 0 && (
           <button
             onClick={() => {
               setActiveSourceType('table');

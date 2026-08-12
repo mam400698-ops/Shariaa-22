@@ -84,14 +84,15 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Admin Panel Link */}
             <button
               onClick={isAdmin ? () => onNavigate('admin') : onOpenAdminLogin}
-              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all btn-press border ${
+              className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition-all btn-press border shadow-xs ${
                 isAdmin
-                  ? 'bg-gradient-to-r from-pink-500 to-orange-500 text-white border-transparent shadow-md shadow-pink-200'
-                  : 'bg-slate-50 text-slate-700 hover:bg-pink-50 hover:text-pink-600 border-slate-200'
+                  ? 'bg-gradient-to-r from-pink-500 via-rose-500 to-orange-400 text-white border-transparent shadow-md shadow-pink-200'
+                  : 'bg-gradient-to-r from-pink-100 via-rose-50 to-orange-100 text-pink-700 hover:from-pink-200 hover:to-orange-200 border-pink-300'
               }`}
+              title="دخول لوحة التحكم والإدارة"
             >
-              <Shield className="w-4 h-4" />
-              <span>{isAdmin ? 'لوحة التحكم' : 'دخول الإدمن'}</span>
+              <Shield className="w-4 h-4 text-pink-600 fill-pink-500/20" />
+              <span>{isAdmin ? 'لوحة التحكم ⚙️' : 'دخول الإدمن 🔑'}</span>
             </button>
 
             {/* Reset App State */}

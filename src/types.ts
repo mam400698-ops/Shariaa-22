@@ -55,8 +55,8 @@ export interface ChangeLog {
 
 export interface TrashItem {
   id: string;
-  itemType: 'subject' | 'paragraph' | 'keyPoint' | 'question';
-  itemData: Subject | Paragraph | KeyPoint | Question;
+  itemType: 'subject' | 'paragraph' | 'keyPoint' | 'question' | 'table';
+  itemData: Subject | Paragraph | KeyPoint | Question | TableData;
   deletedAt: string;
   label: string;
 }

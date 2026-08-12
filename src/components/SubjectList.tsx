@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Subject, Paragraph, Question } from '../types';
-import { BookOpen, Search, ArrowLeft, CheckCircle2, Sparkles, Layers } from 'lucide-react';
+import { BookOpen, Search, ArrowLeft, Shield, Sparkles, Layers, KeyRound } from 'lucide-react';
 
 interface SubjectListProps {
   subjects: Subject[];
@@ -8,6 +8,7 @@ interface SubjectListProps {
   questions: Question[];
   onSelectSubject: (subjectId: string) => void;
   userAnswers: Record<string, number>;
+  onOpenAdminLogin?: () => void;
 }
 
 export const SubjectList: React.FC<SubjectListProps> = ({
@@ -16,6 +17,7 @@ export const SubjectList: React.FC<SubjectListProps> = ({
   questions,
   onSelectSubject,
   userAnswers,
+  onOpenAdminLogin,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -45,6 +47,34 @@ export const SubjectList: React.FC<SubjectListProps> = ({
           </p>
         </div>
       </div>
+
+      {/* Admin Panel Quick Access Banner */}
+      {onOpenAdminLogin && (
+        <div className="bg-gradient-to-r from-slate-900 via-pink-950 to-slate-900 text-white p-4 sm:p-5 rounded-2xl shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border border-pink-500/20">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-pink-500 text-white rounded-xl shadow-sm">
+              <Shield className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-extrabold text-sm text-white flex items-center gap-1.5">
+                <span>لوحة تحكّم وتعديل الأسئلة (الإدمن)</span>
+                <span className="text-[10px] bg-pink-500/30 text-pink-300 px-2 py-0.5 rounded-full border border-pink-400/30">خاص بالمعلمين</span>
+              </h4>
+              <p className="text-xs text-slate-300 font-medium">
+                إضافة المواد، الفقرات، المقارنات، واستيراد الأسئلة دفعة واحدة.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={onOpenAdminLogin}
+            className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 text-white font-black text-xs rounded-xl shadow-md transition-all btn-press flex items-center justify-center gap-2"
+          >
+            <KeyRound className="w-4 h-4" />
+            <span>الدخول لوحة التحكم</span>
+          </button>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">

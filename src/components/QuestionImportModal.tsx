@@ -22,27 +22,44 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
   onSuccess,
 }) => {
   // Subject & Paragraph Selection
-  const initialPara = paragraphs.find(p => p.id === selectedParagraphId) || paragraphs[0];
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string>(initialPara?.subjectId || subjects[0]?.id || '');
-  const [paraId, setParaId] = useState<string>(selectedParagraphId || initialPara?.id || '');
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
+  const [paraId, setParaId] = useState<string>('');
   const [sourceType, setSourceType] = useState<'paragraph' | 'table'>('paragraph');
 
   // Filter paragraphs by selected subject
   const availableParagraphs = paragraphs.filter(p => !selectedSubjectId || p.subjectId === selectedSubjectId);
 
   useEffect(() => {
-    if (selectedParagraphId) {
-      const found = paragraphs.find(p => p.id === selectedParagraphId);
-      if (found) {
-        setSelectedSubjectId(found.subjectId);
-        setParaId(found.id);
+    if (isOpen) {
+      if (selectedParagraphId) {
+        const found = paragraphs.find(p => p.id === selectedParagraphId);
+        if (found) {
+          setSelectedSubjectId(found.subjectId);
+          setParaId(found.id);
+          return;
+        }
       }
-    } else if (availableParagraphs.length > 0) {
-      if (!availableParagraphs.some(p => p.id === paraId)) {
-        setParaId(availableParagraphs[0].id);
+      const defaultSubj = selectedSubjectId || subjects[0]?.id || '';
+      setSelectedSubjectId(defaultSubj);
+      const matchParas = paragraphs.filter(p => !defaultSubj || p.subjectId === defaultSubj);
+      if (matchParas.length > 0) {
+        setParaId(matchParas[0].id);
+      } else if (paragraphs.length > 0) {
+        setSelectedSubjectId(paragraphs[0].subjectId);
+        setParaId(paragraphs[0].id);
       }
     }
-  }, [selectedParagraphId, isOpen, selectedSubjectId, paragraphs]);
+  }, [isOpen, selectedParagraphId, paragraphs, subjects]);
+
+  const handleSubjectChange = (subjId: string) => {
+    setSelectedSubjectId(subjId);
+    const matchParas = paragraphs.filter(p => p.subjectId === subjId);
+    if (matchParas.length > 0) {
+      setParaId(matchParas[0].id);
+    } else {
+      setParaId('');
+    }
+  };
 
   const [rawKeyPointsText, setRawKeyPointsText] = useState('');
   const [rawQuestionsText, setRawQuestionsText] = useState('');
@@ -159,16 +176,10 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
                 <label className="text-[11px] font-bold text-slate-700 block">1. اختر المادة:</label>
                 <select
                   value={selectedSubjectId}
-                  onChange={e => {
-                    const subjId = e.target.value;
-                    setSelectedSubjectId(subjId);
-                    const matchingParas = paragraphs.filter(p => p.subjectId === subjId);
-                    if (matchingParas.length > 0) {
-                      setParaId(matchingParas[0].id);
-                    }
-                  }}
+                  onChange={e => handleSubjectChange(e.target.value)}
                   className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-black text-slate-800 focus:outline-none focus:border-pink-500 shadow-sm"
                 >
+                  <option value="">-- اختر المادة --</option>
                   {subjects.map(s => (
                     <option key={s.id} value={s.id}>
                       {s.name}
@@ -185,6 +196,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
                   onChange={e => setParaId(e.target.value)}
                   className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-black text-slate-800 focus:outline-none focus:border-pink-500 shadow-sm"
                 >
+                  <option value="">-- اختر الفقرة --</option>
                   {availableParagraphs.map(p => (
                     <option key={p.id} value={p.id}>
                       {p.title}
